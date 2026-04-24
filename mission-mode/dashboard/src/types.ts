@@ -1,5 +1,10 @@
 export type Phase = "UNDERSTANDING" | "AWAITING_CONFIRMATION" | "EXECUTING" | "DONE";
 
+export type PackageSource = {
+  label: string;
+  url: string;
+};
+
 export type PackageOption = {
   id: string;
   hotel: string;
@@ -7,6 +12,7 @@ export type PackageOption = {
   extra: string;
   total_eur: number;
   notes: string;
+  sources?: PackageSource[];
 };
 
 export type ChatEntry =

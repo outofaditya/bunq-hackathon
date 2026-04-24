@@ -15,7 +15,7 @@ SYSTEM_PROMPT = """You are Trip Agent, an AI that plans and executes weekend tri
 You are talking to a logged-in bunq user through a chat interface. Your job is to:
 
 1. UNDERSTAND: When the user describes a trip, ask AT MOST 3 concise clarifying questions (location/vibe, budget, dates). Do NOT ask more — better to make a reasonable guess than to interrogate.
-2. RESEARCH: Use the `search_trip_options` tool (live browser search, visible to the user on the dashboard) to find REAL hotels, restaurants, and activities. Fire 2–3 searches with different queries — ONE for hotels, ONE for restaurants, ONE for activities. Each call opens Chromium visibly on the user's screen and streams the query + results live. After the searches, synthesize the results into exactly 3 concrete package options, each with a real hotel name, a real restaurant, one activity, and a plausible total price in euros. Do NOT invent vendors — use names that appeared in your search results. Then call `present_options` with those 3. (Only fall back to `web_search` if `search_trip_options` fails.)
+2. RESEARCH: Use the `search_trip_options` tool (live browser search, visible to the user on the dashboard) to find REAL hotels, restaurants, and activities. Fire 2–3 searches with different queries — ONE for hotels, ONE for restaurants, ONE for activities. Each call opens Chromium visibly on the user's screen and streams the query + results live. After the searches, synthesize the results into exactly 3 concrete package options, each with a real hotel name, a real restaurant, one activity, and a plausible total price in euros. Do NOT invent vendors — use names that appeared in your search results. Then call `present_options`, populating each option's `sources` array with the EXACT URLs from the search results that informed it (3-5 per option). The `intro_text` should briefly reference what you found and link to a top source — e.g. *"Browsed reviews on **CN Traveller** and **Tripadvisor** — here are 3 picks"* with `[CN Traveller](https://www.cntraveller.com/...)` markdown. Before calling `present_options`, in your normal chat reply, write 1–2 sentences mentioning a couple of specific findings (e.g. *"**The St. Regis Almasa** keeps showing up on luxury lists ([The Luxury Editor](url)), and **Crimson Bar & Grill** is on Wanderlog's romantic list ([Wanderlog](url))"*) so the user can see your research informed the picks. (Only fall back to `web_search` if `search_trip_options` fails.)
 3. CONFIRM: After the user picks an option, call `request_confirmation` with a 1-line summary of what will happen ("fire N bunq actions + Slack to partner — go?"). The user MUST say yes before any money moves.
 4. EXECUTE: Only after explicit confirmation, call the bunq tools in this order:
    a. `create_sub_account` — a savings sub-account named after the trip, with the total budget as the goal
@@ -80,25 +80,45 @@ SEARCH_TRIP_OPTIONS_TOOL = {
 
 PRESENT_OPTIONS_TOOL = {
     "name": "present_options",
-    "description": "Show the user three concrete trip packages as clickable cards. Call this after web_search, exactly once.",
+    "description": (
+        "Show the user three concrete trip packages as clickable cards. Call this after "
+        "search_trip_options, exactly once. EACH option's hotel/restaurant/extra names MUST be "
+        "names that actually appeared in your search results. EACH option MUST include a `sources` "
+        "array citing the specific search-result URLs you used to construct that option (3-5 per "
+        "option). Use the URLs returned by search_trip_options verbatim."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "intro_text": {"type": "string", "description": "One short sentence introducing the options."},
+            "intro_text": {"type": "string", "description": "One short sentence introducing the options. May reference findings inline using **bold** + [markdown links]() to specific sources."},
             "options": {
                 "type": "array",
                 "minItems": 3,
                 "maxItems": 3,
                 "items": {
                     "type": "object",
-                    "required": ["id", "hotel", "restaurant", "extra", "total_eur", "notes"],
+                    "required": ["id", "hotel", "restaurant", "extra", "total_eur", "notes", "sources"],
                     "properties": {
                         "id": {"type": "string", "description": "Short id like 'opt-a', 'opt-b', 'opt-c'"},
                         "hotel": {"type": "string"},
                         "restaurant": {"type": "string"},
                         "extra": {"type": "string", "description": "One activity or experience"},
                         "total_eur": {"type": "number", "description": "Total package price in euros"},
-                        "notes": {"type": "string", "description": "1-sentence flavor/vibe note"},
+                        "notes": {"type": "string", "description": "1-sentence flavor/vibe note. Cite a finding inline if useful (e.g. \"per CN Traveller, [classic Nile-front spot](url)\")."},
+                        "sources": {
+                            "type": "array",
+                            "minItems": 2,
+                            "maxItems": 5,
+                            "description": "Cite the search-result URLs that informed this option. Use URLs verbatim from search_trip_options output.",
+                            "items": {
+                                "type": "object",
+                                "required": ["label", "url"],
+                                "properties": {
+                                    "label": {"type": "string", "description": "Short label, e.g. 'CN Traveller', 'Tripadvisor', 'Wanderlog'. Use the hostname or publication name."},
+                                    "url": {"type": "string", "description": "The exact URL from the search result."},
+                                },
+                            },
+                        },
                     },
                 },
             },

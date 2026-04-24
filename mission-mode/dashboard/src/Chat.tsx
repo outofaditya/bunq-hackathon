@@ -197,20 +197,52 @@ function OptionCard({
   disabled: boolean;
   onSelect: () => void;
 }) {
+  const hasSources = (option.sources?.length ?? 0) > 0;
   return (
-    <button
-      className={`option-card ${selected ? "selected" : ""}`}
-      disabled={disabled && !selected}
-      onClick={onSelect}
-    >
-      <div className="option-id">{option.id.toUpperCase()}</div>
-      <div className="option-hotel">{option.hotel}</div>
-      <div className="option-line">🍽 {option.restaurant}</div>
-      <div className="option-line">✨ {option.extra}</div>
-      <div className="option-notes">{option.notes}</div>
-      <div className="option-price">€{option.total_eur.toFixed(0)}</div>
-    </button>
+    <div className={`option-card ${selected ? "selected" : ""} ${disabled && !selected ? "disabled" : ""}`}>
+      <button
+        type="button"
+        className="option-card-button"
+        disabled={disabled && !selected}
+        onClick={onSelect}
+      >
+        <div className="option-id">{option.id.toUpperCase()}</div>
+        <div className="option-hotel">{option.hotel}</div>
+        <div className="option-line">🍽 {option.restaurant}</div>
+        <div className="option-line">✨ {option.extra}</div>
+        <div className="option-notes">{option.notes}</div>
+        <div className="option-price">€{option.total_eur.toFixed(0)}</div>
+      </button>
+      {hasSources && (
+        <div className="option-sources" onClick={(e) => e.stopPropagation()}>
+          <div className="option-sources-label">Sources</div>
+          <div className="option-sources-list">
+            {option.sources!.slice(0, 5).map((s, i) => (
+              <a
+                key={i}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="option-source"
+                title={s.url}
+              >
+                <span className="option-source-dot">↗</span>
+                {s.label || hostnameOf(s.url)}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
+}
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }
 
 function formatToolName(name: string): string {

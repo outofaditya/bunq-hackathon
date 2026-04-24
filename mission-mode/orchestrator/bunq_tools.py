@@ -119,8 +119,17 @@ def create_sub_account(name: str, goal_eur: float) -> dict[str, Any]:
 
 def fund_sub_account(amount_eur: float, to_iban: str, from_account_id: int | None = None) -> dict[str, Any]:
     c = client()
+    primary = get_primary_account()
     if from_account_id is None:
-        from_account_id = get_primary_account()["id"]
+        from_account_id = primary["id"]
+
+    # Self-heal: if primary is short, top up via sugardaddy in €500 chunks before paying.
+    if primary["balance_eur"] < amount_eur + 50:
+        needed = amount_eur + 100 - primary["balance_eur"]
+        target = primary["balance_eur"] + max(needed, 500.0)
+        print(f"[bunq_tools] fund_sub_account: primary €{primary['balance_eur']} < required €{amount_eur}; topping up to €{target}")
+        ensure_primary_balance(min_eur=amount_eur + 50, target_eur=target)
+
     resp = c.post(
         f"user/{c.user_id}/monetary-account/{from_account_id}/payment",
         {
