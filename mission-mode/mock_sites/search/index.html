@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TripLens — Search</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #111318;
+      --muted: #6a6e78;
+      --line: #e7e9ef;
+      --brand: #4f46e5;
+      --brand-2: #7c3aed;
+      --link: #2563eb;
+      --link-visited: #7c3aed;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 14px; }
+
+    header.bar {
+      padding: 14px 28px; background: white; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 20px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; }
+    .brand-mark {
+      width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: white; font-weight: 800;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+    }
+    .search-bar {
+      flex: 1; max-width: 640px; display: flex; align-items: center;
+      border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px 6px 16px; background: white;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .search-bar.focused { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,0.12); }
+    .search-bar input {
+      flex: 1; border: 0; outline: none; font-size: 15px; font-family: inherit; background: transparent;
+    }
+    .search-bar input::placeholder { color: var(--muted); }
+    .search-bar .search-btn {
+      border: 0; background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: white;
+      padding: 7px 16px; border-radius: 999px; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    .caret { display: inline-block; width: 2px; height: 16px; background: var(--ink); margin-left: 2px; vertical-align: middle; animation: blink 1s infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    main { max-width: 760px; margin: 0 auto; padding: 22px 20px 60px; }
+    .tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--line); margin-bottom: 20px; font-size: 13px; color: var(--muted); }
+    .tab { padding: 8px 0 10px; position: relative; }
+    .tab.active { color: var(--ink); font-weight: 600; }
+    .tab.active::after { content: ""; position: absolute; bottom: -1px; left: 0; right: 0; height: 2px; background: var(--brand); border-radius: 2px; }
+
+    .status-row { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+    .spinner {
+      width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--brand);
+      border-radius: 50%; animation: spin 700ms linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .result { padding: 16px 0; border-bottom: 1px solid var(--line); animation: slidein 260ms ease-out both; }
+    @keyframes slidein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .result-host { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+    .result-title { font-size: 18px; color: var(--link); font-weight: 500; text-decoration: none; line-height: 1.35; }
+    .result-title:visited { color: var(--link-visited); }
+    .result-title:hover { text-decoration: underline; }
+    .result-snippet { color: #3c3f45; margin-top: 6px; line-height: 1.5; font-size: 13px; }
+
+    .empty { padding: 40px 0; text-align: center; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <div class="brand-mark">T</div>
+      <div>TripLens</div>
+    </div>
+    <form class="search-bar" id="search-bar" onsubmit="event.preventDefault();">
+      <input id="search-input" type="text" autocomplete="off" readonly />
+      <button class="search-btn" type="button">Search</button>
+    </form>
+  </header>
+  <main>
+    <nav class="tabs">
+      <span class="tab active">Travel</span>
+      <span class="tab">Hotels</span>
+      <span class="tab">Restaurants</span>
+      <span class="tab">Activities</span>
+      <span class="tab">Images</span>
+    </nav>
+    <div class="status-row" id="status-row">
+      <div class="spinner"></div>
+      <div id="status-text">Searching the web…</div>
+    </div>
+    <div id="results"></div>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const query = params.get("q") || "";
+    const dataB64 = params.get("data") || "";
+
+    const input = document.getElementById("search-input");
+    const statusRow = document.getElementById("status-row");
+    const statusText = document.getElementById("status-text");
+    const resultsEl = document.getElementById("results");
+
+    // Decode pre-fetched results
+    let results = [];
+    try {
+      if (dataB64) {
+        const decoded = atob(dataB64);
+        results = JSON.parse(decodeURIComponent(escape(decoded)));
+      }
+    } catch (e) {
+      results = [];
+    }
+
+    // Stage 1: type the query character-by-character
+    let idx = 0;
+    input.setAttribute("readonly", "readonly");
+    document.getElementById("search-bar").classList.add("focused");
+    function typeTick() {
+      if (idx <= query.length) {
+        input.value = query.slice(0, idx);
+        idx++;
+        setTimeout(typeTick, 45);
+      } else {
+        setTimeout(runSearch, 450);
+      }
+    }
+
+    function runSearch() {
+      document.getElementById("search-bar").classList.remove("focused");
+      statusRow.style.display = "flex";
+      statusText.textContent = "Searching the web…";
+      setTimeout(showResults, 1100);
+    }
+
+    function hostOf(u) {
+      try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; }
+    }
+
+    function showResults() {
+      if (!results.length) {
+        statusRow.style.display = "none";
+        resultsEl.innerHTML = '<div class="empty">No results — try a different query.</div>';
+        return;
+      }
+      statusText.textContent = `About ${results.length * 1200} results · ${(Math.random() * 0.4 + 0.2).toFixed(2)}s`;
+      const spinner = document.querySelector(".spinner");
+      if (spinner) spinner.remove();
+
+      // Render results one-by-one
+      let r = 0;
+      function addOne() {
+        if (r >= results.length) return;
+        const x = results[r++];
+        const div = document.createElement("div");
+        div.className = "result";
+        const host = hostOf(x.url || "");
+        div.innerHTML = `
+          <div class="result-host">${host}</div>
+          <a class="result-title" href="${x.url}" target="_blank" rel="noopener">${x.title || x.url}</a>
+          ${x.snippet ? `<div class="result-snippet">${x.snippet}</div>` : ""}
+        `;
+        resultsEl.appendChild(div);
+        setTimeout(addOne, 120);
+      }
+      addOne();
+    }
+
+    typeTick();
+  </script>
+</body>
+</html>

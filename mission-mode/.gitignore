@@ -1,0 +1,12 @@
+.env
+.venv/
+bunq_context.json
+google_credentials.json
+google_token.json
+__pycache__/
+*.pyc
+node_modules/
+dashboard/dist/
+.DS_Store
+*.wav
+*.mp3

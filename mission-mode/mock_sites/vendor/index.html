@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StayHub — Book your stay</title>
+  <style>
+    :root {
+      --bg: #f6f4ee;
+      --panel: #ffffff;
+      --ink: #1c1d22;
+      --muted: #6c6f78;
+      --line: #e6e3da;
+      --brand: #ff5a3c;
+      --brand-2: #ffb347;
+      --ok: #1f9d6e;
+      --shadow: 0 1px 0 rgba(0,0,0,0.02), 0 12px 30px rgba(20,20,30,0.08);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; font-size: 14px; line-height: 1.5; }
+    header.nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 28px; background: var(--panel); border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; letter-spacing: -0.02em; }
+    .brand-mark { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, var(--brand), var(--brand-2)); display: grid; place-items: center; color: white; font-size: 14px; font-weight: 800; }
+    .nav-meta { font-size: 12px; color: var(--muted); }
+
+    main { max-width: 880px; margin: 0 auto; padding: 28px 24px 60px; }
+    .stage { animation: fade 240ms ease-out; }
+    @keyframes fade { from { opacity: 0; transform: translateY(6px);} to { opacity: 1; transform: none;} }
+
+    .progress { display: flex; gap: 8px; margin-bottom: 22px; }
+    .progress .step {
+      flex: 1; height: 4px; background: var(--line); border-radius: 999px;
+    }
+    .progress .step.active { background: var(--brand); }
+    .progress .step.done { background: var(--ok); }
+
+    .crumb { font-size: 12px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 8px; }
+    h1 { font-size: 26px; margin: 0 0 16px; letter-spacing: -0.02em; }
+    h2 { font-size: 18px; margin: 0 0 14px; letter-spacing: -0.01em; }
+
+    .hero {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow);
+      display: grid; grid-template-columns: 320px 1fr;
+    }
+    .hero-img {
+      background: linear-gradient(135deg, #c8b9ff 0%, #ffb6c1 50%, #ffd589 100%);
+      position: relative; min-height: 220px;
+    }
+    .hero-img::after {
+      content: "🏨"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 64px; opacity: 0.85;
+    }
+    .hero-body { padding: 22px 24px; display: flex; flex-direction: column; gap: 10px; }
+    .hero-title { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+    .hero-sub { color: var(--muted); }
+    .hero-stars { color: var(--brand); font-size: 14px; }
+    .hero-row { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 12px; border-top: 1px dashed var(--line); }
+    .price { font-size: 22px; font-weight: 800; }
+    .price small { font-weight: 500; color: var(--muted); font-size: 12px; margin-left: 4px; }
+
+    .summary {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
+      margin-top: 18px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+    }
+    .summary .cell .label { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+    .summary .cell .value { font-weight: 600; margin-top: 4px; }
+
+    .actions { margin-top: 22px; display: flex; gap: 10px; align-items: center; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 10px;
+      border: 0; cursor: pointer; font-size: 14px; font-weight: 700; font-family: inherit; transition: transform 120ms, box-shadow 120ms;
+    }
+    .btn-primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: white; box-shadow: 0 6px 18px rgba(255,90,60,0.35); }
+    .btn-primary:hover { transform: translateY(-1px); }
+    .btn-ghost { background: transparent; color: var(--muted); }
+
+    form.card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+    input, select {
+      padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); background: white; color: var(--ink);
+      font-family: inherit; font-size: 14px;
+    }
+    input:focus, select:focus { outline: 2px solid var(--brand); outline-offset: 0; }
+
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .pay-card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px;
+    }
+    .pay-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+    .pay-row:last-of-type { border-bottom: 0; font-weight: 700; font-size: 16px; }
+    .pay-method {
+      margin-top: 12px; padding: 14px; border: 2px solid var(--brand); border-radius: 12px;
+      display: flex; align-items: center; gap: 12px; background: rgba(255,90,60,0.04);
+    }
+    .pay-method .mark {
+      width: 36px; height: 36px; border-radius: 9px; background: linear-gradient(135deg, #ff3366 0%, #ff6b35 100%);
+      display: grid; place-items: center; color: white; font-weight: 800;
+    }
+    .pay-method-meta .name { font-weight: 700; }
+    .pay-method-meta .detail { font-size: 12px; color: var(--muted); }
+
+    .done-card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 32px 28px;
+      text-align: center;
+    }
+    .done-check {
+      width: 72px; height: 72px; margin: 0 auto 18px; border-radius: 50%;
+      background: var(--ok); color: white; display: grid; place-items: center; font-size: 32px; font-weight: 800;
+    }
+    .done-ref { display: inline-block; margin-top: 10px; padding: 6px 12px; border-radius: 999px; background: var(--bg); font-family: ui-monospace, monospace; font-size: 13px; }
+    .done-meta { color: var(--muted); margin-top: 14px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="brand">
+      <div class="brand-mark">S</div>
+      <div>StayHub <span class="nav-meta" style="font-weight:400;margin-left:6px;">— powered by trusted partners</span></div>
+    </div>
+    <div class="nav-meta">Secure checkout · 256-bit TLS</div>
+  </header>
+
+  <main>
+    <div class="progress">
+      <div class="step" data-step="1"></div>
+      <div class="step" data-step="2"></div>
+      <div class="step" data-step="3"></div>
+      <div class="step" data-step="4"></div>
+    </div>
+
+    <!-- STAGE 1: LANDING -->
+    <section class="stage" data-stage="landing">
+      <div class="crumb">Step 1 — review</div>
+      <h1>Confirm your stay</h1>
+      <div class="hero">
+        <div class="hero-img"></div>
+        <div class="hero-body">
+          <div class="hero-stars">★ ★ ★ ★ ☆</div>
+          <div class="hero-title" id="hotel-name">Hotel V Fizeaustraat</div>
+          <div class="hero-sub" id="hotel-location">Amsterdam, Netherlands</div>
+          <div class="hero-row">
+            <div class="price"><span id="price-display">€445</span><small> · 2 nights</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="summary">
+        <div class="cell"><div class="label">Check-in</div><div class="value" id="checkin-display">Sat 26 Apr</div></div>
+        <div class="cell"><div class="label">Check-out</div><div class="value" id="checkout-display">Sun 27 Apr</div></div>
+        <div class="cell"><div class="label">Guests</div><div class="value">2 adults · 1 room</div></div>
+      </div>
+      <div class="actions">
+        <button id="book-now" class="btn btn-primary">Book this stay →</button>
+        <button class="btn btn-ghost">Save for later</button>
+      </div>
+    </section>
+
+    <!-- STAGE 2: GUEST DETAILS -->
+    <section class="stage" data-stage="details" hidden>
+      <div class="crumb">Step 2 — guest details</div>
+      <h1>Who's checking in?</h1>
+      <form class="card" onsubmit="event.preventDefault();">
+        <div class="row-2">
+          <label>First name
+            <input id="guest-first" type="text" placeholder="Sara" autocomplete="off" />
+          </label>
+          <label>Last name
+            <input id="guest-last" type="text" placeholder="van Doorn" autocomplete="off" />
+          </label>
+        </div>
+        <label>Email
+          <input id="guest-email" type="email" placeholder="you@example.com" autocomplete="off" />
+        </label>
+        <label>Estimated arrival
+          <select id="guest-arrival">
+            <option>Before 18:00</option>
+            <option selected>18:00 – 22:00</option>
+            <option>After 22:00</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button id="continue" type="button" class="btn btn-primary">Continue to payment →</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- STAGE 3: PAYMENT -->
+    <section class="stage" data-stage="payment" hidden>
+      <div class="crumb">Step 3 — payment</div>
+      <h1>Pay securely</h1>
+      <div class="pay-card">
+        <h2>Order summary</h2>
+        <div class="pay-row"><span>Room (2 nights)</span><span id="pay-room">€395.00</span></div>
+        <div class="pay-row"><span>City tax</span><span>€18.00</span></div>
+        <div class="pay-row"><span>Service fee</span><span>€32.00</span></div>
+        <div class="pay-row"><span>Total</span><span id="pay-total">€445.00</span></div>
+
+        <div class="pay-method">
+          <div class="mark">b</div>
+          <div class="pay-method-meta">
+            <div class="name">Pay with bunq</div>
+            <div class="detail">Direct from your trip sub-account · no card needed</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="confirm-pay" class="btn btn-primary">Confirm &amp; pay →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STAGE 4: CONFIRMATION -->
+    <section class="stage" data-stage="done" hidden>
+      <div class="done-card">
+        <div class="done-check">✓</div>
+        <h1 style="margin-bottom:6px;">Booking confirmed</h1>
+        <div class="done-meta">A confirmation has been sent to <span id="done-email">your email</span>.</div>
+        <div>Reference: <span class="done-ref" id="booking-ref">STH-XXXXXX</span></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const hotel = params.get("hotel") || "Hotel V Fizeaustraat";
+    const location_ = params.get("location") || "Amsterdam, Netherlands";
+    const price = parseFloat(params.get("price") || "445");
+    const checkin = params.get("checkin") || "Sat 26 Apr";
+    const checkout = params.get("checkout") || "Sun 27 Apr";
+    const guestName = (params.get("guest") || "Sara van Doorn").split(" ");
+
+    document.getElementById("hotel-name").textContent = hotel;
+    document.getElementById("hotel-location").textContent = location_;
+    document.getElementById("price-display").textContent = "€" + price.toFixed(0);
+    document.getElementById("checkin-display").textContent = checkin;
+    document.getElementById("checkout-display").textContent = checkout;
+    document.getElementById("pay-room").textContent = "€" + (price - 50).toFixed(2);
+    document.getElementById("pay-total").textContent = "€" + price.toFixed(2);
+
+    const stages = ["landing", "details", "payment", "done"];
+
+    function show(name) {
+      stages.forEach((s, idx) => {
+        const el = document.querySelector('[data-stage="' + s + '"]');
+        el.hidden = s !== name;
+        const step = document.querySelector('.step[data-step="' + (idx + 1) + '"]');
+        if (idx < stages.indexOf(name)) step.className = "step done";
+        else if (idx === stages.indexOf(name)) step.className = "step active";
+        else step.className = "step";
+      });
+    }
+    show("landing");
+
+    document.getElementById("book-now").addEventListener("click", () => show("details"));
+    document.getElementById("continue").addEventListener("click", () => show("payment"));
+    document.getElementById("confirm-pay").addEventListener("click", () => {
+      const ref = "STH-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+      document.getElementById("booking-ref").textContent = ref;
+      const email = (document.getElementById("guest-email").value || "your email");
+      document.getElementById("done-email").textContent = email;
+      show("done");
+    });
+  </script>
+</body>
+</html>
