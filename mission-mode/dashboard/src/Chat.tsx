@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatEntry, Phase, PackageOption } from "./types";
+import MarkdownText from "./markdown";
 
 type Props = {
   entries: ChatEntry[];
@@ -118,17 +119,14 @@ function ChatBubble({
   if (entry.kind === "user") {
     return (
       <div className="bubble user">
-        <div className="bubble-text">{entry.text}</div>
+        <MarkdownText text={entry.text} variant="user" />
       </div>
     );
   }
   if (entry.kind === "agent") {
     return (
-      <div className="bubble agent">
-        <div className="bubble-text">
-          {entry.text}
-          {entry.streaming && <span className="caret">▍</span>}
-        </div>
+      <div className={`bubble agent${entry.streaming ? " streaming" : ""}`}>
+        <MarkdownText text={entry.text} variant="agent" streaming={entry.streaming} />
       </div>
     );
   }
