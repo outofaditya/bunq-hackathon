@@ -23,7 +23,44 @@ export type EventType =
   | "draft_resolved"
   | "draft_final"
   | "bunq_webhook"
+  // The Council (Money has feelings)
+  | "personas_loaded"
+  | "persona_speaks"
+  | "persona_payout"
+  | "persona_payout_error"
+  | "persona_account_created"
+  | "persona_voice_error"
+  | "persona_cleanup"
+  | "council_verdict"
   | string;
+
+export interface Persona {
+  account_id: number;
+  iban: string;
+  name: string;
+  archetype: string;
+  voice_id: string;
+  blurb: string;
+  catchphrase: string;
+  balance_eur: number;
+  is_demo: boolean;
+}
+
+export interface PersonaLine {
+  persona_id: number;
+  name: string;
+  archetype: string;
+  voice_id: string;
+  stance: "for" | "against" | "neutral";
+  text: string;
+  audio_url?: string | null;
+}
+
+export interface CouncilVerdict {
+  verdict: "APPROVE" | "REJECT" | "COMPROMISE";
+  amount_eur: number;
+  reasoning: string;
+}
 
 export interface BusEvent {
   type: EventType;

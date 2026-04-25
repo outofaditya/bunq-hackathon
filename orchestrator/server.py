@@ -276,12 +276,18 @@ async def start_mission_from_voice(name: str, request: Request) -> dict[str, Any
 
 
 def _classify_mission(transcript: str) -> str:
-    """Map a free-text spoken command to one of weekend/payday/travel."""
+    """Map a free-text spoken command to one of weekend/payday/travel/council."""
     transcript = (transcript or "").strip()
     if not transcript:
         return "weekend"
     # Cheap keyword fast-path before we burn an LLM token.
     t = transcript.lower()
+    if any(k in t for k in [
+        "council", "should i buy", "should i get", "tempted", "talk me out",
+        "talk me into", "convince me", "do i need", "argue", "feelings",
+        "voices", "opinions", "vote", "verdict", "is it worth",
+    ]):
+        return "council"
     if any(k in t for k in ["payday", "salary", "rent", "bills", "monthly", "duwo"]):
         return "payday"
     if any(k in t for k in ["fly", "flight", "trip", "travel", "tokyo", "abroad", "vacation", "holiday"]):
@@ -300,7 +306,8 @@ def _classify_mission(transcript: str) -> str:
                 "role": "user",
                 "content": (
                     "Classify the user's spoken command into ONE mission name and reply with "
-                    "exactly that word and nothing else: weekend, payday, travel.\n\n"
+                    "exactly that word and nothing else: weekend, payday, travel, council.\n"
+                    "council = the user is wavering on a purchase and wants opinions.\n\n"
                     f"Command: {transcript}"
                 ),
             }],
@@ -310,7 +317,7 @@ def _classify_mission(transcript: str) -> str:
             if getattr(b, "type", None) == "text":
                 text += b.text
         text = text.strip().lower().split()[0] if text.strip() else "weekend"
-        return text if text in ("weekend", "payday", "travel") else "weekend"
+        return text if text in ("weekend", "payday", "travel", "council") else "weekend"
     except Exception:
         return "weekend"
 
@@ -575,6 +582,37 @@ async def bunq_webhook(request: Request) -> dict[str, Any]:
 
 
 # ----- Health / state probes ------------------------------------------
+
+@app.get("/personas")
+async def get_personas() -> dict[str, Any]:
+    """Read-only snapshot of the Council — useful for the dashboard pre-mission."""
+    try:
+        tb = _get_toolbox()
+        personas = tb.list_personas(ensure_min=5)
+        return {"ok": True, "personas": personas}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/admin/cleanup-demo-subs")
+async def admin_cleanup_demo_subs(request: Request) -> dict[str, Any]:
+    """Drain + cancel any demo-tagged sub-account.
+
+    Body (optional): {"dry": true}  ← preview only, no mutations.
+    Untagged accounts the user pre-created are NEVER touched.
+    """
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    dry = bool(body.get("dry", False))
+    try:
+        tb = _get_toolbox()
+        return {"ok": True, **tb.cleanup_demo_subs(dry=dry)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+
 
 @app.get("/health")
 async def health() -> dict[str, Any]:

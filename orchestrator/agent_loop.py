@@ -44,6 +44,9 @@ def _dispatch_bunq(toolbox: BunqToolbox, name: str, args: dict[str, Any]) -> dic
         "set_card_status": toolbox.set_card_status,
         "freeze_home_card": toolbox.freeze_home_card,
         "unfreeze_home_card": toolbox.unfreeze_home_card,
+        "list_personas": toolbox.list_personas,
+        "council_payout": toolbox.council_payout,
+        "cleanup_demo_subs": toolbox.cleanup_demo_subs,
     }
     fn = method_map.get(name)
     if fn is None:
@@ -285,14 +288,59 @@ def run_mission(
                 })
                 continue
 
+            if name == "persona_speak":
+                # Voice synth + bus event — no bunq mutation, no balance snapshot.
+                result = toolbox.persona_speak(
+                    persona_id=int(args.get("persona_id", 0)),
+                    text=str(args.get("text", "")),
+                    stance=str(args.get("stance", "neutral")),
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps(result, default=str),
+                })
+                continue
+
+            if name == "council_verdict":
+                payload = {
+                    "verdict":    str(args.get("verdict", "APPROVE")).upper(),
+                    "amount_eur": float(args.get("amount_eur", 0.0)),
+                    "reasoning":  str(args.get("reasoning", ""))[:240],
+                }
+                bus.publish("council_verdict", payload)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({"ok": True, **payload}, default=str),
+                })
+                continue
+
+            if name == "list_personas":
+                # Returns a list (not a dict) — special-case so we don't crash _dispatch_bunq.
+                try:
+                    personas = toolbox.list_personas(ensure_min=int(args.get("ensure_min", 5)))
+                    result = {"personas": personas, "count": len(personas)}
+                except Exception as e:  # noqa: BLE001
+                    bus.publish("step_error", {"tool": name, "error": str(e)})
+                    result = {"error": str(e)}
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps(result, default=str),
+                })
+                continue
+
             result = _dispatch_bunq(toolbox, name, args)
             if name == "create_draft_payment" and "draft_id" in result:
                 last_draft_id = result["draft_id"]
-            # Emit balance snapshot after every bunq-mutating tool.
-            try:
-                toolbox.snapshot_balance(step_label=name)
-            except Exception as e:  # noqa: BLE001
-                bus.publish("balance_snapshot_error", {"step": name, "error": str(e)})
+            # Emit balance snapshot after every bunq-mutating tool, except
+            # for persona-registry ops which don't move money on the primary.
+            if name not in ("cleanup_demo_subs",):
+                try:
+                    toolbox.snapshot_balance(step_label=name)
+                except Exception as e:  # noqa: BLE001
+                    bus.publish("balance_snapshot_error", {"step": name, "error": str(e)})
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tu.id,

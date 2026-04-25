@@ -219,6 +219,84 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "list_personas",
+        "description": (
+            "List the user's bunq sub-accounts as voiced personas (the Council). Each persona has "
+            "an account_id, name (with emoji), archetype (ROMANTIC/PROTECTOR/DREAMER/IMPATIENT/"
+            "GRUMPY_TAX/PLEASER/CARETAKER/ADVENTURER/WISE), voice_id, balance_eur, and catchphrase. "
+            "Call this FIRST in the council mission so you know who's at the table. If the user has "
+            "fewer than 5 sub-accounts, the system auto-creates a starter cast."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "persona_speak",
+        "description": (
+            "Have one persona speak up out loud — synthesizes their unique voice via ElevenLabs and "
+            "publishes a `persona_speaks` event with the audio URL. Use this once per persona, in "
+            "character. Keep each line under 16 words, present tense, conversational. The line should "
+            "reflect THIS persona's stance toward the purchase (defending its own goal, attacking the "
+            "spend, or reluctantly compromising). `stance` is one of 'against', 'for', or 'neutral'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "persona_id": {"type": "integer", "description": "account_id from list_personas."},
+                "text":       {"type": "string", "description": "The line the persona says, in their voice."},
+                "stance":     {"type": "string", "enum": ["against", "for", "neutral"]},
+            },
+            "required": ["persona_id", "text"],
+        },
+    },
+    {
+        "name": "council_payout",
+        "description": (
+            "After the Council has spoken and you've issued a verdict, move money from primary into "
+            "the persona accounts that argued hardest. Use this when the user 'doesn't spend' (REJECT "
+            "verdict) — the saved amount is divided across personas that pushed back, in proportion "
+            "to how strongly they argued. Each entry is {persona_id, amount_eur}. Skips any entry "
+            "with amount <= 0. The TOTAL across all entries should equal the amount the user almost "
+            "spent (or a sensible fraction)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "distributions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "persona_id": {"type": "integer"},
+                            "amount_eur": {"type": "number"},
+                        },
+                        "required": ["persona_id", "amount_eur"],
+                    },
+                },
+                "description": {"type": "string", "description": "Short label, e.g. 'Saved by arguing · €120'."},
+            },
+            "required": ["distributions"],
+        },
+    },
+    {
+        "name": "council_verdict",
+        "description": (
+            "Announce the Council's verdict on the proposed purchase. `verdict` is one of APPROVE, "
+            "REJECT, or COMPROMISE. Provide a short `reasoning` line (under 24 words) summarising "
+            "what the personas decided together. Publishes a `council_verdict` event the dashboard "
+            "renders as the headline outcome. Call this AFTER all personas have spoken and (if "
+            "REJECTing) AFTER council_payout has distributed the saved money."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "verdict":   {"type": "string", "enum": ["APPROVE", "REJECT", "COMPROMISE"]},
+                "amount_eur": {"type": "number", "description": "The amount the user proposed to spend."},
+                "reasoning": {"type": "string"},
+            },
+            "required": ["verdict", "reasoning"],
+        },
+    },
+    {
         "name": "narrate",
         "description": (
             "Speak a one-line summary to the user via TTS. Use AT MOST once per step so the demo "

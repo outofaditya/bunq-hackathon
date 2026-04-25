@@ -25,6 +25,57 @@ class BunqToolbox:
         self.uid = client.user_id
         self.primary_id = client.get_primary_account_id()
         self.primary_iban = self._iban_of_bank_account(self.primary_id)
+        # Lazy: don't touch ElevenLabs / Anthropic at construction time.
+        self._personas = None  # type: ignore[assignment]
+
+    # ------------------------------------------------------------------
+    # Persona manager (Money has feelings)
+    # ------------------------------------------------------------------
+
+    @property
+    def personas(self):  # noqa: ANN201
+        from .personas import PersonaManager
+
+        if self._personas is None:
+            self._personas = PersonaManager(self)
+        return self._personas
+
+    def list_personas(self, *, ensure_min: int = 5) -> list[dict[str, Any]]:
+        """Return the persona registry — fresh from bunq each call."""
+        bus.publish("step_started", {"tool": "list_personas"})
+        result = self.personas.discover_or_create(ensure_min=ensure_min)
+        bus.publish("step_finished", {"tool": "list_personas", "result": {"count": len(result)}})
+        return result
+
+    def persona_speak(self, persona_id: int, text: str, stance: str = "neutral") -> dict[str, Any]:
+        return self.personas.speak(int(persona_id), text, stance=stance)
+
+    def council_payout(
+        self,
+        distributions: list[dict[str, Any]],
+        description: str = "Council payout",
+    ) -> dict[str, Any]:
+        bus.publish("step_started", {
+            "tool": "council_payout",
+            "count": len(distributions or []),
+            "description": description,
+        })
+        results = self.personas.payout_to_personas(distributions or [], description=description)
+        ok_count = sum(1 for r in results if r.get("ok"))
+        total = sum(float(r.get("amount_eur", 0.0)) for r in results if r.get("ok"))
+        result = {"transferred": ok_count, "total_eur": round(total, 2), "details": results}
+        bus.publish("step_finished", {"tool": "council_payout", "result": result})
+        return result
+
+    def cleanup_demo_subs(self, dry: bool = False) -> dict[str, Any]:
+        bus.publish("step_started", {"tool": "cleanup_demo_subs", "dry": dry})
+        result = self.personas.cleanup_demo_accounts(dry=dry)
+        bus.publish("step_finished", {"tool": "cleanup_demo_subs", "result": {
+            "drained": result["drained"],
+            "cancelled": result["cancelled"],
+            "skipped": result["skipped"],
+        }})
+        return result
 
     # ------------------------------------------------------------------
     # Internal helpers

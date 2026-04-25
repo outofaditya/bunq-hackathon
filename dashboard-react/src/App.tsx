@@ -7,12 +7,15 @@ import { Badge } from "@/components/ui/badge";
 import { CascadeRow } from "@/components/CascadeRow";
 import { MicDialog } from "@/components/MicDialog";
 import { BrowserPanel, type BrowserPanelState } from "@/components/BrowserPanel";
+import { CouncilPanel, type CouncilState } from "@/components/CouncilPanel";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { useEventBus } from "@/hooks/useEventBus";
 import { useMicRecorder } from "@/hooks/useMicRecorder";
 import { audioQueue, fxBuzz, fxChime, fxDoneStep, fxTick, fxZoom } from "@/lib/audio-fx";
 import { cn, fmtEur } from "@/lib/utils";
-import type { BusEvent, CascadeRow as Row, HealthInfo } from "@/lib/types";
+import type {
+  BusEvent, CascadeRow as Row, CouncilVerdict, HealthInfo, Persona, PersonaLine,
+} from "@/lib/types";
 
 // =================== cascade reducer ===================
 type CascadeState = { rows: Row[]; inFlight: string[] };
@@ -105,6 +108,7 @@ export function App() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [voiceCard, setVoiceCard] = useState<{ label: string; line: string; route?: string } | null>(null);
   const [browser, setBrowser] = useState<BrowserPanelState>({ visible: false, line: "", step: "step 0", shotData: null, changing: false });
+  const [council, setCouncil] = useState<CouncilState>({ personas: [], lines: [], verdict: null, payouts: {} });
   const [draft, setDraft] = useState<{ status: "pending" | "accepted" | "rejected" | "timeout"; title: string; msg: string } | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
@@ -139,6 +143,7 @@ export function App() {
     dispatch({ type: "reset" });
     setVoiceCard(null);
     setBrowser({ visible: false, line: "", step: "step 0", shotData: null, changing: false });
+    setCouncil({ personas: [], lines: [], verdict: null, payouts: {} });
     setDraft(null);
     setSummary(null);
     audioQueue.reset();
@@ -151,6 +156,7 @@ export function App() {
         dispatch({ type: "reset" });
         setVoiceCard(null);
         setBrowser({ visible: false, line: "", step: "step 0", shotData: null, changing: false });
+        setCouncil({ personas: [], lines: [], verdict: null, payouts: {} });
         setDraft(null);
         setSummary(null);
         audioQueue.reset();
@@ -227,6 +233,55 @@ export function App() {
           msg: `Draft ${ev.draft_id} → ${status}.`,
         });
         dispatch({ type: "draftResolved", status, draft_id: Number(ev.draft_id) });
+        break;
+      }
+      case "personas_loaded": {
+        const personas = (Array.isArray(ev.personas) ? ev.personas : []) as Persona[];
+        setCouncil((c) => ({ ...c, personas }));
+        break;
+      }
+      case "persona_speaks": {
+        fxTick();
+        const line: PersonaLine = {
+          persona_id: Number(ev.persona_id),
+          name:       String(ev.name || ""),
+          archetype:  String(ev.archetype || ""),
+          voice_id:   String(ev.voice_id || ""),
+          stance:     (ev.stance === "for" || ev.stance === "against" ? ev.stance : "neutral") as PersonaLine["stance"],
+          text:       String(ev.text || ""),
+          audio_url:  typeof ev.audio_url === "string" ? ev.audio_url : null,
+        };
+        setCouncil((c) => ({ ...c, lines: [...c.lines, line] }));
+        if (line.audio_url) audioQueue.enqueue(line.audio_url);
+        // Surface the line in the narration footer too.
+        setNarration(line.text);
+        if (narrationTimer.current) clearTimeout(narrationTimer.current);
+        narrationTimer.current = setTimeout(() => setNarration(null), 6500);
+        break;
+      }
+      case "persona_payout": {
+        fxDoneStep();
+        const pid = Number(ev.persona_id);
+        const amt = Number(ev.amount_eur || 0);
+        setCouncil((c) => {
+          const next = { ...(c.payouts || {}) };
+          next[pid] = (next[pid] || 0) + amt;
+          // Optimistically bump the persona's balance card for instant feedback.
+          const personas = c.personas.map((p) =>
+            p.account_id === pid ? { ...p, balance_eur: p.balance_eur + amt } : p,
+          );
+          return { ...c, payouts: next, personas };
+        });
+        break;
+      }
+      case "council_verdict": {
+        const v: CouncilVerdict = {
+          verdict:    (String(ev.verdict || "APPROVE").toUpperCase() as CouncilVerdict["verdict"]),
+          amount_eur: Number(ev.amount_eur || 0),
+          reasoning:  String(ev.reasoning || ""),
+        };
+        setCouncil((c) => ({ ...c, verdict: v }));
+        fxChime();
         break;
       }
       case "mission_complete":
@@ -398,7 +453,7 @@ export function App() {
                   </motion.div>
                 )}
 
-                {/* RUNNING / VOICE — browser panel if available, else agent status */}
+                {/* RUNNING / VOICE — council > browser > agent status */}
                 {(view === "running" || view === "voice") && (
                   <motion.div
                     key="right"
@@ -406,7 +461,9 @@ export function App() {
                     {...FADE_UP}
                     className="w-full h-full"
                   >
-                    {browser.visible ? (
+                    {council.personas.length > 0 ? (
+                      <CouncilPanel state={council} />
+                    ) : browser.visible ? (
                       <BrowserPanel state={browser} />
                     ) : (
                       <AgentStatus narration={narration} actionCount={cascade.rows.length} />
