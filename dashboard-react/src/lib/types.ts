@@ -29,9 +29,22 @@ export type EventType =
   | "persona_payout"
   | "persona_payout_error"
   | "persona_account_created"
+  | "persona_funded"
   | "persona_voice_error"
   | "persona_cleanup"
   | "council_verdict"
+  // Genesis (auto bring-up before user interaction)
+  | "genesis_started"
+  | "genesis_step_started"
+  | "genesis_step_finished"
+  | "genesis_complete"
+  | "genesis_warning"
+  | "genesis_error"
+  // Confirmation prompt at end of council
+  | "awaiting_confirmation"
+  | "user_confirmation_received"
+  | "user_confirmation"
+  | "user_confirmation_timeout"
   | string;
 
 export interface Persona {
@@ -60,6 +73,22 @@ export interface CouncilVerdict {
   verdict: "APPROVE" | "REJECT" | "COMPROMISE";
   amount_eur: number;
   reasoning: string;
+}
+
+export interface GenesisStep {
+  label: string;
+  emoji: string;
+  archetype: string;
+  seed_eur: number;
+  done: boolean;
+}
+
+export interface AwaitingConfirmation {
+  question: string;
+  action_summary: string;
+  winning_persona_id: number | null;
+  totalSeconds: number;
+  startedAt: number;
 }
 
 export interface BusEvent {

@@ -435,6 +435,150 @@ class PersonaManager:
         bus.publish("personas_loaded", {"personas": personas})
         return personas
 
+    # -- genesis ------------------------------------------------------
+    #
+    # Public visible boot of the council: seed primary, then create each
+    # starter-cast persona one at a time, fund with a randomised amount,
+    # emit a per-step event so the dashboard can animate tile-by-tile.
+    # Idempotent — skips any persona whose account is already created.
+
+    def run_genesis(
+        self,
+        *,
+        seed_primary_eur: float = 600.0,
+        random_seed: int | None = None,
+    ) -> dict[str, Any]:
+        """Run the visible Council bring-up. Returns a summary dict; emits:
+          - genesis_started
+          - genesis_step_started   (per persona, before bunq calls)
+          - persona_account_created (when bunq POST returns)
+          - persona_funded          (when seed transfer lands)
+          - genesis_step_finished   (per persona, after fund + sleep)
+          - personas_loaded         (final registry, full cast)
+          - genesis_complete        (after the last persona is in)
+        """
+        rng = random.Random(random_seed)
+        bus.publish("genesis_started", {
+            "primary_id":  self.tb.primary_id,
+            "cast_size":   len(STARTER_CAST),
+            "seed_eur":    seed_primary_eur,
+        })
+
+        # Top up primary so we have euros to scatter.
+        try:
+            self.tb.seed_primary(seed_primary_eur)
+            self.tb.snapshot_balance("genesis_seed")
+        except Exception as e:  # noqa: BLE001
+            bus.publish("genesis_warning", {"step": "seed_primary", "error": str(e)})
+
+        # Snapshot what already exists so we know what to skip.
+        existing_subs = {s["description"]: s for s in self._list_active_subs()}
+        cache: dict[str, Any] = self._registry.get("personas", {})
+        created: list[dict[str, Any]] = []
+        skipped: list[str] = []
+
+        for tpl in STARTER_CAST:
+            label = tpl["label"]
+            tagged = label + DEMO_TAG
+            archetype = tpl["archetype"]
+            catchphrase = tpl.get("catchphrase", "")
+            seed_amt = float(rng.choice([20, 30, 40, 50, 60, 70, 80]))
+
+            bus.publish("genesis_step_started", {
+                "label":      tagged,
+                "emoji":      label.split(" ", 1)[0] if " " in label else "💰",
+                "archetype":  archetype,
+                "seed_eur":   seed_amt,
+                "skipped":    tagged in existing_subs or label in existing_subs,
+            })
+            print(f"[genesis] {tagged} (archetype={archetype}, seed=€{seed_amt:.0f})", flush=True)
+
+            # Existence check — skip if we already created it
+            existing = existing_subs.get(tagged) or existing_subs.get(label)
+            if existing:
+                skipped.append(tagged)
+                cache[existing["description"]] = {
+                    "archetype":   archetype,
+                    "catchphrase": catchphrase or ARCHETYPES[archetype]["blurb"],
+                }
+                created.append(_make_persona(
+                    account_id=existing["id"],
+                    iban=existing["iban"],
+                    name=existing["description"],
+                    archetype=archetype,
+                    catchphrase=catchphrase or ARCHETYPES[archetype]["blurb"],
+                    balance_eur=existing["balance_eur"],
+                    is_demo=existing["description"].endswith(DEMO_TAG),
+                ))
+                bus.publish("genesis_step_finished", {
+                    "label":         existing["description"],
+                    "account_id":    existing["id"],
+                    "balance_eur":   existing["balance_eur"],
+                    "archetype":     archetype,
+                    "skipped":       True,
+                })
+                time.sleep(0.4)
+                continue
+
+            try:
+                info = self._create_sub(tagged)
+                time.sleep(0.7)  # rate-limit cushion (bunq sandbox: 5 POST / 3s)
+                self._transfer(
+                    from_id=self.tb.primary_id,
+                    to_iban=info["iban"],
+                    to_name=self._self_name,
+                    amount_eur=seed_amt,
+                    description=f"Genesis → {label}",
+                )
+                bus.publish("persona_funded", {
+                    "account_id": info["id"],
+                    "label":      tagged,
+                    "amount_eur": seed_amt,
+                })
+                cache[tagged] = {
+                    "archetype":   archetype,
+                    "catchphrase": catchphrase or ARCHETYPES[archetype]["blurb"],
+                }
+                persona = _make_persona(
+                    account_id=info["id"],
+                    iban=info["iban"],
+                    name=tagged,
+                    archetype=archetype,
+                    catchphrase=cache[tagged]["catchphrase"],
+                    balance_eur=seed_amt,
+                    is_demo=True,
+                )
+                created.append(persona)
+                # Incremental reveal: emit the partial cast so the dashboard
+                # animates each tile in as it lands.
+                bus.publish("personas_loaded", {"personas": list(created)})
+                bus.publish("genesis_step_finished", {
+                    "label":       tagged,
+                    "account_id":  info["id"],
+                    "balance_eur": seed_amt,
+                    "archetype":   archetype,
+                    "skipped":     False,
+                })
+                time.sleep(0.5)
+            except Exception as e:  # noqa: BLE001
+                bus.publish("genesis_warning", {"step": "create_or_fund", "label": tagged, "error": str(e)})
+                time.sleep(0.4)
+
+        self._registry["personas"] = cache
+        _save_registry(self._registry)
+
+        bus.publish("personas_loaded", {"personas": created})
+        bus.publish("genesis_complete", {
+            "count":   len(created),
+            "created": [p["name"] for p in created if p["name"] not in skipped],
+            "skipped": skipped,
+        })
+        try:
+            self.tb.snapshot_balance("genesis_complete")
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "personas": created, "skipped": skipped}
+
     # -- council voice synth -------------------------------------------
 
     def speak(

@@ -302,6 +302,23 @@ def run_mission(
                 })
                 continue
 
+            if name == "request_confirmation":
+                # Blocks the worker thread up to timeout_s waiting for the
+                # user to record an answer via /missions/council/confirm.
+                wpid = args.get("winning_persona_id")
+                result = toolbox.await_user_confirmation(
+                    question=str(args.get("question", "Should I execute this?")),
+                    action_summary=str(args.get("action_summary", "")),
+                    winning_persona_id=int(wpid) if wpid is not None else None,
+                    timeout_s=float(args.get("timeout_s", 25.0)),
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps(result, default=str),
+                })
+                continue
+
             if name == "council_verdict":
                 payload = {
                     "verdict":    str(args.get("verdict", "APPROVE")).upper(),

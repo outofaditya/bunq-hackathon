@@ -4,10 +4,13 @@ export type MicState = "idle" | "listening" | "transcribing" | "error";
 
 interface UseMicOptions {
   maxDurationSec?: number;
-  onTranscribed?: (resp: { ok: boolean; transcript?: string; mission?: string; error?: string }) => void;
+  onTranscribed?: (resp: { ok: boolean; transcript?: string; mission?: string; decision?: string; error?: string }) => void;
+  /** If provided, replaces the default POST to /missions/auto/start-from-mic.
+   *  Used by the council confirmation flow to upload to a different endpoint. */
+  uploadFn?: (blob: Blob, mime: string) => Promise<{ ok: boolean; transcript?: string; mission?: string; decision?: string; error?: string }>;
 }
 
-export function useMicRecorder({ maxDurationSec = 30, onTranscribed }: UseMicOptions = {}) {
+export function useMicRecorder({ maxDurationSec = 30, onTranscribed, uploadFn }: UseMicOptions = {}) {
   const [state, setState] = useState<MicState>("idle");
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -112,14 +115,18 @@ export function useMicRecorder({ maxDurationSec = 30, onTranscribed }: UseMicOpt
       ? "ogg"
       : "bin";
 
-    const fd = new FormData();
-    fd.append("audio", blob, `recording.${ext}`);
-    fd.append("seed_eur", "500");
-    fd.append("wait_seconds", "60");
-
     try {
-      const r = await fetch("/missions/auto/start-from-mic", { method: "POST", body: fd });
-      const j = await r.json();
+      let j;
+      if (uploadFn) {
+        j = await uploadFn(blob, mime);
+      } else {
+        const fd = new FormData();
+        fd.append("audio", blob, `recording.${ext}`);
+        fd.append("seed_eur", "500");
+        fd.append("wait_seconds", "60");
+        const r = await fetch("/missions/auto/start-from-mic", { method: "POST", body: fd });
+        j = await r.json();
+      }
       onTranscribed?.(j);
       setState("idle");
     } catch (e: unknown) {
@@ -127,7 +134,7 @@ export function useMicRecorder({ maxDurationSec = 30, onTranscribed }: UseMicOpt
       setError(msg);
       setState("error");
     }
-  }, [cleanup, onTranscribed]);
+  }, [cleanup, onTranscribed, uploadFn]);
 
   return {
     state,

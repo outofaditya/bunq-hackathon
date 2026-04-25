@@ -297,6 +297,46 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "request_confirmation",
+        "description": (
+            "Open the user's microphone and BLOCK until they say yes/no to the proposed action. "
+            "Use this in Council mode AFTER the verdict is decided but BEFORE running any "
+            "money-moving tool (council_payout / create_draft_payment). The dashboard auto-opens "
+            "the mic dialog with the question text shown.\n\n"
+            "Phrase `question` in the voice of the persona who 'won' the vote — short, ≤14 words, "
+            "with personality (e.g. 'Tokyo's still calling. Lock the €120 in?'). Provide a clear "
+            "`action_summary` so the user sees what will happen if they say yes (e.g. "
+            "'€120 → €40 Sara, €50 Tokyo, €30 Emergency'). Pass the `winning_persona_id` so the "
+            "dashboard can highlight that tile while the question is asked.\n\n"
+            "Returns:\n"
+            "  decision          ∈ 'yes' | 'no' | 'unsure' | 'timeout'\n"
+            "  picked_persona_id : int | null  ← if the user named a specific persona\n"
+            "                       (e.g. 'agree with Tokyo'), this is set to that\n"
+            "                       persona's account_id. ALWAYS check this — when set,\n"
+            "                       the user is overriding your majority verdict and\n"
+            "                       siding with that persona's stance from Step 3.\n\n"
+            "How to honour it:\n"
+            "  decision='yes' AND picked_persona_id is null → execute YOUR planned verdict.\n"
+            "  decision='yes' AND picked_persona_id is set  → use THAT persona's stance from\n"
+            "                                                  Step 3 to pick the action:\n"
+            "                                                    'against' → execute REJECT\n"
+            "                                                    'for'     → execute APPROVE\n"
+            "                                                    'neutral' → execute COMPROMISE\n"
+            "  decision='no' / 'unsure' / 'timeout'        → execute NOTHING; narrate a\n"
+            "                                                  graceful exit and finish_mission."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question":           {"type": "string", "description": "≤14-word question voiced by the winning persona."},
+                "action_summary":     {"type": "string", "description": "Plain-English summary of what runs on YES."},
+                "winning_persona_id": {"type": "integer", "description": "account_id of the persona phrasing the question."},
+                "timeout_s":          {"type": "number",  "minimum": 3, "maximum": 60},
+            },
+            "required": ["question", "action_summary"],
+        },
+    },
+    {
         "name": "narrate",
         "description": (
             "Speak a one-line summary to the user via TTS. Use AT MOST once per step so the demo "

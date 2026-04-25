@@ -67,6 +67,63 @@ class BunqToolbox:
         bus.publish("step_finished", {"tool": "council_payout", "result": result})
         return result
 
+    def await_user_confirmation(
+        self,
+        question: str,
+        action_summary: str = "",
+        winning_persona_id: int | None = None,
+        timeout_s: float = 25.0,
+    ) -> dict[str, Any]:
+        """Block the mission thread until the user replies via /missions/council/confirm.
+
+        Emits `awaiting_confirmation` so the dashboard auto-opens the mic dialog
+        with the question prefilled. The `winning_persona_id`, when set, lets
+        the dashboard label which persona is asking — useful for the demo voice.
+        """
+        from . import server as _srv  # noqa: PLC0415  — avoid circular import at module load
+
+        timeout_s = max(3.0, min(60.0, float(timeout_s)))
+        question = (question or "").strip()[:240] or "Should I execute this?"
+        bus.publish("awaiting_confirmation", {
+            "question":           question,
+            "action_summary":     (action_summary or "")[:240],
+            "winning_persona_id": winning_persona_id,
+            "timeout_s":          timeout_s,
+        })
+        bus.publish("step_started", {"tool": "request_confirmation", "question": question})
+
+        _srv._user_confirm_event.clear()
+        _srv._user_confirm_slot = None
+
+        got = _srv._user_confirm_event.wait(timeout=timeout_s)
+        slot = _srv._user_confirm_slot
+        if got and slot:
+            result = {
+                "ok":                True,
+                "decision":          slot.get("decision", "unsure"),
+                "transcript":        slot.get("transcript", ""),
+                "confidence":        slot.get("confidence", 0.0),
+                "picked_persona_id": slot.get("picked_persona_id"),
+                "picked_name":       slot.get("picked_name"),
+            }
+        else:
+            result = {
+                "ok":                True,
+                "decision":          "timeout",
+                "transcript":        "",
+                "confidence":        0.0,
+                "picked_persona_id": None,
+                "picked_name":       None,
+            }
+            bus.publish("user_confirmation_timeout", {"question": question})
+
+        bus.publish("step_finished", {"tool": "request_confirmation", "result": result})
+        bus.publish("user_confirmation", {
+            "decision":   result["decision"],
+            "transcript": result["transcript"],
+        })
+        return result
+
     def cleanup_demo_subs(self, dry: bool = False) -> dict[str, Any]:
         bus.publish("step_started", {"tool": "cleanup_demo_subs", "dry": dry})
         result = self.personas.cleanup_demo_accounts(dry=dry)

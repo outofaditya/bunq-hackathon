@@ -115,6 +115,14 @@ export function App() {
   const [narration, setNarration] = useState<string | null>(null);
   const [micOpen, setMicOpen] = useState(false);
   const [view, setView] = useState<ViewState>("idle");
+  // Genesis flow — runs automatically before any user voice interaction.
+  const [genesisStarted, setGenesisStarted] = useState(false);
+  const [genesisDone, setGenesisDone] = useState(false);
+  const [genesisStep, setGenesisStep] = useState<{ label: string; emoji: string } | null>(null);
+  // Confirmation flow at end of council — winner persona asks user out loud.
+  const [awaitingConfirm, setAwaitingConfirm] = useState<{ question: string; action_summary: string; winning_persona_id: number | null } | null>(null);
+  const [userConfirm, setUserConfirm] = useState<{ transcript: string; decision: string; picked_name?: string | null } | null>(null);
+  const [voteOpen, setVoteOpen] = useState(false);
   const narrationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const newId = () => `r-${++idCounter.current}`;
@@ -126,6 +134,24 @@ export function App() {
       setMicOpen(false);
     },
   });
+
+  // Second recorder dedicated to council confirmation — uploads to a different
+  // endpoint, no seed_eur / wait_seconds payload.
+  const confirmMic = useMicRecorder({
+    maxDurationSec: 12,
+    uploadFn: async (blob, mime) => {
+      const ext = mime.includes("webm") ? "webm" : mime.includes("mp4") ? "m4a" : mime.includes("ogg") ? "ogg" : "bin";
+      const fd = new FormData();
+      fd.append("audio", blob, `confirm.${ext}`);
+      const r = await fetch("/missions/council/confirm", { method: "POST", body: fd });
+      return r.json();
+    },
+    onTranscribed: (resp) => {
+      setVoteOpen(false);
+      if (!resp.ok) alert("Confirmation upload failed: " + (resp.error || "unknown"));
+    },
+  });
+  const onConfirmCancel = useCallback(() => { confirmMic.cancel(); setVoteOpen(false); }, [confirmMic]);
 
   const onMicClick = useCallback(async () => {
     setMicOpen(true);
@@ -143,9 +169,12 @@ export function App() {
     dispatch({ type: "reset" });
     setVoiceCard(null);
     setBrowser({ visible: false, line: "", step: "step 0", shotData: null, changing: false });
-    setCouncil({ personas: [], lines: [], verdict: null, payouts: {} });
+    // Keep council personas across resets — they persist between missions.
+    setCouncil((c) => ({ ...c, lines: [], verdict: null, payouts: {} }));
     setDraft(null);
     setSummary(null);
+    setAwaitingConfirm(null);
+    setUserConfirm(null);
     audioQueue.reset();
     setView("idle");
   }, []);
@@ -156,7 +185,10 @@ export function App() {
         dispatch({ type: "reset" });
         setVoiceCard(null);
         setBrowser({ visible: false, line: "", step: "step 0", shotData: null, changing: false });
-        setCouncil({ personas: [], lines: [], verdict: null, payouts: {} });
+        // Keep personas — they're long-lived. Reset only ephemeral mission state.
+        setCouncil((c) => ({ ...c, lines: [], verdict: null, payouts: {} }));
+        setAwaitingConfirm(null);
+        setUserConfirm(null);
         setDraft(null);
         setSummary(null);
         audioQueue.reset();
@@ -284,6 +316,85 @@ export function App() {
         fxChime();
         break;
       }
+      case "genesis_started": {
+        setGenesisStarted(true);
+        setGenesisDone(false);
+        setCouncil((c) => ({ ...c, personas: [], lines: [], verdict: null, payouts: {} }));
+        break;
+      }
+      case "genesis_step_started": {
+        fxTick();
+        setGenesisStep({
+          label: String(ev.label || "").replace(/ ·\s?MM$/, ""),
+          emoji: String(ev.emoji || "💰"),
+        });
+        break;
+      }
+      case "genesis_step_finished": {
+        fxDoneStep();
+        // The matching personas_loaded event already updated the tile list.
+        break;
+      }
+      case "genesis_complete": {
+        setGenesisDone(true);
+        setGenesisStarted(false);
+        setGenesisStep(null);
+        break;
+      }
+      case "genesis_warning":
+      case "genesis_error": {
+        console.warn("genesis", ev);
+        // Unblock the mic anyway so the user isn't stuck.
+        setGenesisDone(true);
+        setGenesisStarted(false);
+        break;
+      }
+      case "awaiting_confirmation": {
+        const ac = {
+          question:           String(ev.question || "Should I execute this?"),
+          action_summary:     String(ev.action_summary || ""),
+          winning_persona_id: ev.winning_persona_id != null ? Number(ev.winning_persona_id) : null,
+        };
+        setAwaitingConfirm(ac);
+        // Auto-open the confirmation mic so the user just speaks.
+        setVoteOpen(true);
+        void confirmMic.start();
+        break;
+      }
+      case "user_confirmation_received": {
+        const pickedName = typeof ev.picked_name === "string" ? ev.picked_name : null;
+        setUserConfirm({
+          transcript:  String(ev.transcript || ""),
+          decision:    String(ev.decision || "unsure"),
+          picked_name: pickedName,
+        });
+        setAwaitingConfirm(null);
+        setVoteOpen(false);
+        // Highlight the picked persona's tile briefly by injecting a synthetic
+        // line so the user sees confirmation that their override registered.
+        if (pickedName && ev.picked_persona_id != null) {
+          const pid = Number(ev.picked_persona_id);
+          setCouncil((c) => ({
+            ...c,
+            lines: [...c.lines, {
+              persona_id: pid,
+              name:       pickedName,
+              archetype:  "",
+              voice_id:   "",
+              stance:     "for" as const,
+              text:       "User sided with me.",
+              audio_url:  null,
+            }],
+          }));
+        }
+        break;
+      }
+      case "user_confirmation_timeout": {
+        setAwaitingConfirm(null);
+        setUserConfirm({ transcript: "(no answer)", decision: "timeout" });
+        setVoteOpen(false);
+        break;
+      }
       case "mission_complete":
         fxChime();
         setSummary(String(ev.summary || "Mission complete"));
@@ -304,6 +415,34 @@ export function App() {
     return () => { cancelled = true; };
   }, []);
 
+  // Auto-genesis: on first load, check the persona registry. If it's empty,
+  // kick off the visible Council bring-up. The mic stays disabled until the
+  // genesis_complete event arrives.
+  useEffect(() => {
+    let cancelled = false;
+    if (!health?.user_id) return; // wait until bunq is authenticated
+    (async () => {
+      try {
+        const r = await fetch("/personas");
+        const j = await r.json();
+        if (cancelled) return;
+        const personas: Persona[] = Array.isArray(j.personas) ? j.personas : [];
+        if (personas.length === 0) {
+          setGenesisStarted(true);
+          await fetch("/genesis/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+          // events drive the rest of the flow
+        } else {
+          // Council already populated from a prior run — just load it and unlock mic.
+          setCouncil((c) => ({ ...c, personas }));
+          setGenesisDone(true);
+        }
+      } catch (e) {
+        console.warn("auto-genesis bootstrap failed:", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [health?.user_id]);
+
   const draftBadgeVariant = useMemo(() => {
     if (!draft) return "outline" as const;
     if (draft.status === "accepted") return "complete" as const;
@@ -311,7 +450,11 @@ export function App() {
     return "upcoming" as const;
   }, [draft]);
 
-  const splitView = view === "running" || (view === "voice" && (browser.visible || cascade.rows.length > 0));
+  // The Council panel is visible whenever there's anything in the room — during
+  // genesis bring-up, idle (after genesis), and any active mission.
+  const councilVisible = council.personas.length > 0 || genesisStarted;
+  const splitView = councilVisible || view === "running" || (view === "voice" && (browser.visible || cascade.rows.length > 0));
+  const micReady = genesisDone && !!health?.user_id;
 
   return (
     <MotionConfig transition={{ duration: 0.32, ease: PUNCTUAL_EASE }}>
@@ -373,6 +516,60 @@ export function App() {
                             )}
                           </div>
                           <div className="text-body text-foreground leading-snug">{voiceCard.line}</div>
+                        </Card>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* Idle-with-council: mic ready, no cascade yet → show the
+                      hero so the user has something to tap. */}
+                  {view === "idle" && councilVisible && cascade.rows.length === 0 && (
+                    <motion.div key="idle-hero" layout {...FADE_UP} className="flex-1 min-h-0 flex">
+                      <div className="m-auto">
+                        <IdleMic
+                          onStart={onMicClick}
+                          disabled={!micReady}
+                          muted={!micReady}
+                          hint={genesisStarted ? `Building the council… ${genesisStep ? `${genesisStep.emoji} ${genesisStep.label}` : ""}` : undefined}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* Awaiting confirmation banner — shown when the winning
+                      persona is asking the user out loud. */}
+                  <AnimatePresence>
+                    {awaitingConfirm && (
+                      <motion.div key="confirm" layout {...FADE_UP}>
+                        <Card className="p-4 border-l-2 border-l-status-scheduled bg-status-scheduled/5">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="relative w-2 h-2">
+                              <span className="absolute inset-0 rounded-full bg-status-scheduled animate-ping opacity-75" />
+                              <span className="absolute inset-0 rounded-full bg-status-scheduled" />
+                            </span>
+                            <span className="label-uc text-status-scheduled">Listening · your call</span>
+                          </div>
+                          <div className="text-title text-foreground leading-snug italic">"{awaitingConfirm.question}"</div>
+                          {awaitingConfirm.action_summary && (
+                            <div className="text-meta tabular text-muted-foreground mt-1.5">
+                              On yes: {awaitingConfirm.action_summary}
+                            </div>
+                          )}
+                        </Card>
+                      </motion.div>
+                    )}
+                    {userConfirm && !awaitingConfirm && (
+                      <motion.div key="confirm-echo" layout {...FADE_UP}>
+                        <Card className="p-3 flex items-center gap-3">
+                          <Badge className="uppercase shrink-0">{userConfirm.decision}</Badge>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-body text-foreground italic truncate">"{userConfirm.transcript}"</div>
+                            {userConfirm.picked_name && (
+                              <div className="text-meta text-status-scheduled mt-0.5">
+                                → sided with {userConfirm.picked_name.replace(/ ·\s?MM$/, "")}
+                              </div>
+                            )}
+                          </div>
                         </Card>
                       </motion.div>
                     )}
@@ -441,15 +638,25 @@ export function App() {
               className="min-h-0 flex"
             >
               <AnimatePresence mode="wait">
-                {/* IDLE — centered breathing mic */}
-                {view === "idle" && (
+                {/* IDLE — show council if it exists; otherwise centered mic */}
+                {view === "idle" && councilVisible && (
+                  <motion.div
+                    key="idle-council"
+                    layout
+                    {...FADE_UP}
+                    className="w-full h-full"
+                  >
+                    <CouncilPanel state={council} />
+                  </motion.div>
+                )}
+                {view === "idle" && !councilVisible && (
                   <motion.div
                     key="hero"
                     layout
                     {...FADE_UP}
                     className="m-auto flex flex-col items-center"
                   >
-                    <IdleMic onStart={onMicClick} disabled={!health?.user_id} />
+                    <IdleMic onStart={onMicClick} disabled={!micReady} muted={!micReady} hint={genesisStarted ? "Building the council…" : undefined} />
                   </motion.div>
                 )}
 
@@ -550,13 +757,22 @@ export function App() {
           onStop={mic.stop}
           onCancel={onMicCancel}
         />
+
+        <MicDialog
+          open={voteOpen}
+          state={confirmMic.state}
+          seconds={confirmMic.seconds}
+          analyser={confirmMic.analyser.current}
+          onStop={confirmMic.stop}
+          onCancel={onConfirmCancel}
+        />
       </div>
     </MotionConfig>
   );
 }
 
 // =================== sub-components ===================
-function IdleMic({ onStart, disabled }: { onStart: () => void; disabled?: boolean }) {
+function IdleMic({ onStart, disabled, muted, hint }: { onStart: () => void; disabled?: boolean; muted?: boolean; hint?: string }) {
   return (
     <div className="relative flex flex-col items-center">
       <div className="pointer-events-none absolute inset-0 -m-32 rounded-full opacity-[0.10] blur-3xl bg-[radial-gradient(closest-side,var(--color-punctual),transparent)]" />
@@ -578,26 +794,34 @@ function IdleMic({ onStart, disabled }: { onStart: () => void; disabled?: boolea
         </Button>
       </motion.div>
 
-      <h1 className="text-title-lg text-foreground mt-9 mb-1.5">Tap to talk</h1>
-      <p className="text-body text-muted-foreground mb-7">Speak the mission like you'd say it to a friend.</p>
+      <h1 className="text-title-lg text-foreground mt-9 mb-1.5">
+        {muted ? (hint || "Preparing the room…") : "Tap to talk"}
+      </h1>
+      <p className="text-body text-muted-foreground mb-7">
+        {muted
+          ? "We're seeding your accounts and assembling the council. The mic unlocks when they're ready."
+          : "Speak the mission like you'd say it to a friend."}
+      </p>
 
-      <div className="flex flex-col items-center gap-1">
-        {[
-          "five hundred for me and Sara, weekend",
-          "lock in this month's bills",
-          "flying to Tokyo Friday, freeze the card",
-        ].map((s, i) => (
-          <motion.span
-            key={s}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15 + i * 0.08, duration: 0.32, ease: PUNCTUAL_EASE }}
-            className="text-meta text-paper-400 italic"
-          >
-            “{s}”
-          </motion.span>
-        ))}
-      </div>
+      {!muted && (
+        <div className="flex flex-col items-center gap-1">
+          {[
+            "should I buy this hundred-and-twenty-euro sweater?",
+            "five hundred for me and Sara, weekend",
+            "flying to Tokyo Friday, freeze the card",
+          ].map((s, i) => (
+            <motion.span
+              key={s}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 + i * 0.08, duration: 0.32, ease: PUNCTUAL_EASE }}
+              className="text-meta text-paper-400 italic"
+            >
+              “{s}”
+            </motion.span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

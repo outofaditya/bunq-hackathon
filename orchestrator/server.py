@@ -67,6 +67,117 @@ _bunq_client: BunqClient | None = None
 _toolbox: BunqToolbox | None = None
 _public_url: str | None = None
 _mission_thread: threading.Thread | None = None
+_genesis_thread: threading.Thread | None = None
+
+# Bridge: agent-loop call to request_confirmation() blocks on this event.
+# /missions/council/confirm fills the slot + sets the event.
+_user_confirm_event: threading.Event = threading.Event()
+_user_confirm_slot: dict[str, Any] | None = None
+
+
+def _classify_council_decision(
+    transcript: str,
+    personas: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Classify the user's spoken confirmation during a council.
+
+    Returns a dict: `{decision, picked_persona_id, picked_name, confidence}`.
+    `decision` ∈ 'yes' | 'no' | 'unsure'.
+
+    The user can answer:
+      - "yes" / "do it" / "approve"        → decision = 'yes', no override
+      - "no" / "skip" / "cancel"           → decision = 'no'
+      - "agree with Tokyo" / "go with Sara" / just "Tokyo"
+                                            → decision = 'yes' AND picked_persona_id
+                                              is set, so the agent honours that
+                                              persona's stance instead of its own
+                                              majority verdict
+      - anything else                       → decision = 'unsure' (Haiku fallback)
+    Negation guards: "not Tokyo", "no Sara" → 'no' (negation wins, no pick).
+    """
+    import re as _re
+
+    t = (transcript or "").lower().strip()
+    if not t:
+        return {"decision": "unsure", "picked_persona_id": None, "picked_name": None, "confidence": 0.0}
+
+    # 1. Explicit negation FIRST so "not Tokyo" doesn't get mis-classified.
+    no_kw = [
+        "no", "nope", "nah", "cancel", "stop", "wait", "don't", "do not",
+        "never mind", "nevermind", "abort", "scrap that", "skip",
+        "not now", "rejected", "deny", "denied", "not really", "no thanks",
+    ]
+    for kw in no_kw:
+        # Multi-word keywords need plain substring; single words use word boundary.
+        if " " in kw:
+            if kw in t:
+                return {"decision": "no", "picked_persona_id": None, "picked_name": None, "confidence": 0.9}
+        elif _re.search(rf"\b{_re.escape(kw)}\b", t):
+            return {"decision": "no", "picked_persona_id": None, "picked_name": None, "confidence": 0.9}
+
+    # 2. Persona-name detection. The user side-stepped yes/no by naming a persona;
+    # treat that as 'yes' WITH an override pointing at the named persona.
+    personas = personas or []
+    for p in personas:
+        # Persona name is "🌹 Sara Anniversary · MM" — strip emoji prefix and
+        # the demo-tag suffix so we match "Sara Anniversary" and "Sara".
+        raw = str(p.get("name", ""))
+        plain = _re.sub(r"^\S+\s+", "", raw).replace(" · MM", "").strip().lower()
+        first_word = plain.split()[0] if plain else ""
+        if plain and _re.search(rf"\b{_re.escape(plain)}\b", t):
+            return {
+                "decision":          "yes",
+                "picked_persona_id": int(p["account_id"]),
+                "picked_name":       raw,
+                "confidence":        0.92,
+            }
+        if first_word and len(first_word) >= 3 and _re.search(rf"\b{_re.escape(first_word)}\b", t):
+            return {
+                "decision":          "yes",
+                "picked_persona_id": int(p["account_id"]),
+                "picked_name":       raw,
+                "confidence":        0.85,
+            }
+
+    # 3. Plain affirmative keywords.
+    yes_kw = [
+        "yes", "yeah", "yep", "yup", "do it", "go ahead", "execute", "approve",
+        "approved", "confirm", "confirmed", "send it", "let's do it", "fine",
+        "okay", "ok", "sure", "alright", "go for it", "proceed",
+    ]
+    for kw in yes_kw:
+        if " " in kw:
+            if kw in t:
+                return {"decision": "yes", "picked_persona_id": None, "picked_name": None, "confidence": 0.85}
+        elif _re.search(rf"\b{_re.escape(kw)}\b", t):
+            return {"decision": "yes", "picked_persona_id": None, "picked_name": None, "confidence": 0.85}
+
+    # 4. Haiku fallback for ambiguous phrasing.
+    try:
+        client = anthropic.Anthropic()
+        model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip() or "claude-haiku-4-5-20251001"
+        resp = client.messages.create(
+            model=model,
+            max_tokens=4,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "The user is being asked to confirm a money operation. Reply with exactly "
+                    "one word: yes, no, or unsure.\n\n"
+                    f"User said: {transcript}"
+                ),
+            }],
+        )
+        text = ""
+        for b in resp.content:
+            if getattr(b, "type", None) == "text":
+                text += b.text
+        word = text.strip().lower().split()[0] if text.strip() else "unsure"
+        if word in ("yes", "no"):
+            return {"decision": word, "picked_persona_id": None, "picked_name": None, "confidence": 0.7}
+    except Exception:  # noqa: BLE001
+        pass
+    return {"decision": "unsure", "picked_persona_id": None, "picked_name": None, "confidence": 0.4}
 
 
 # ----------------------------------------------------------------------
@@ -599,13 +710,95 @@ async def bunq_webhook(request: Request) -> dict[str, Any]:
 
 @app.get("/personas")
 async def get_personas() -> dict[str, Any]:
-    """Read-only snapshot of the Council — useful for the dashboard pre-mission."""
+    """Read-only snapshot of the Council. Returns whatever sub-accounts exist
+    right now — does NOT auto-create. The Genesis flow is responsible for
+    populating an empty room.
+    """
     try:
         tb = _get_toolbox()
-        personas = tb.list_personas(ensure_min=5)
-        return {"ok": True, "personas": personas}
+        personas = tb.personas.list_cached()
+        return {"ok": True, "personas": personas, "count": len(personas)}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/genesis/start")
+async def genesis_start(request: Request) -> dict[str, Any]:
+    """Kick off the visible Council bring-up: seed primary, create each
+    persona one-by-one, fund with a randomised amount, emit per-step events
+    so the dashboard can animate tiles materialising. Idempotent — already-
+    existing demo personas are reported as `skipped` instead of recreated.
+    """
+    global _genesis_thread
+    if _genesis_thread is not None and _genesis_thread.is_alive():
+        return {"ok": False, "error": "Genesis already running."}
+    if _mission_thread is not None and _mission_thread.is_alive():
+        return {"ok": False, "error": "A mission is already running — finish or reset before genesis."}
+
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    seed_eur = float(body.get("seed_primary_eur", 600.0))
+
+    bus.reset()
+
+    def _run() -> None:
+        tb = _get_toolbox()
+        try:
+            tb.personas.run_genesis(seed_primary_eur=seed_eur)
+        except Exception as e:  # noqa: BLE001
+            bus.publish("genesis_error", {"error": str(e)})
+
+    _genesis_thread = threading.Thread(target=_run, daemon=True, name="mission-mode-genesis")
+    _genesis_thread.start()
+    return {"ok": True, "seed_primary_eur": seed_eur}
+
+
+@app.post("/missions/council/confirm")
+async def council_confirm(audio: UploadFile = File(...)) -> dict[str, Any]:
+    """Receive the user's spoken yes/no during a council confirmation prompt,
+    classify it, fill the bridge slot, and unblock the mission thread waiting
+    inside `request_confirmation`.
+
+    The classifier also detects when the user names a specific persona (e.g.
+    "agree with Tokyo"). In that case the slot carries `picked_persona_id` so
+    the agent loop can honour the user's pick instead of its own majority verdict.
+    """
+    global _user_confirm_slot
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        return {"ok": False, "error": "Empty audio upload"}
+    try:
+        transcript = transcribe_bytes(audio_bytes, filename=audio.filename or "confirm.webm")
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"STT failed: {e}"}
+
+    # Pull the current persona registry so the classifier can match names.
+    personas: list[dict[str, Any]] = []
+    try:
+        personas = _get_toolbox().personas.list_cached()
+    except Exception:  # noqa: BLE001
+        pass
+
+    classification = _classify_council_decision(transcript, personas=personas)
+    _user_confirm_slot = {
+        "transcript":        transcript,
+        "decision":          classification["decision"],
+        "picked_persona_id": classification["picked_persona_id"],
+        "picked_name":       classification["picked_name"],
+        "confidence":        classification["confidence"],
+    }
+    bus.publish("user_confirmation_received", {
+        "transcript":        transcript,
+        "decision":          classification["decision"],
+        "picked_persona_id": classification["picked_persona_id"],
+        "picked_name":       classification["picked_name"],
+        "confidence":        classification["confidence"],
+    })
+    _user_confirm_event.set()
+    return {"ok": True, **_user_confirm_slot}
 
 
 @app.post("/admin/cleanup-demo-subs")
