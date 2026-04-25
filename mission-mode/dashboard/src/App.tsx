@@ -280,9 +280,6 @@ export default function App() {
             />
           </div>
         )}
-        <div className="phase-pill" data-phase={phase}>
-          {phase.replace(/_/g, " ")}
-        </div>
         <ConnectionIndicator status={connection} />
       </header>
       <main className="app-body">
