@@ -267,6 +267,11 @@ async def run_turn(session: Session, user_message: str) -> None:
                         # Rebuild assistant_content from the final message, stripping fields
                         # that the API rejects on reentry (e.g. `text` on server_tool_use).
                         assistant_content = [_clean_block(b.model_dump()) for b in msg.content]
+                        # Also surface Anthropic-side web_search results in the
+                        # dashboard's Research feed — when our local DDG/Ecosia
+                        # path is rate-limited the agent falls back to web_search,
+                        # but those hits would otherwise never reach the panel.
+                        await _publish_web_search_results(msg.content)
                         tool_uses = [
                             {"id": b.id, "name": b.name, "input": b.input}
                             for b in msg.content if b.type == "tool_use"
@@ -370,6 +375,46 @@ def _is_yes(text: str) -> bool:
         return False
     positive = {"yes", "y", "go", "confirm", "do it", "ok", "okay", "sure", "yep", "yeah", "proceed", "let's go", "approve"}
     return any(t == p or t.startswith(p + " ") or p in t for p in positive)
+
+
+async def _publish_web_search_results(content_blocks: list[Any]) -> None:
+    """Surface Anthropic's server-side web_search results in the Research feed.
+
+    The agent has access to a server-side `web_search` tool (used as fallback
+    when our local DDG/Ecosia search is rate-limited). Anthropic returns the
+    hits as `web_search_tool_result` blocks in the assistant content. Without
+    this hook, those results would never reach the dashboard's Research panel.
+
+    Each `web_search_tool_result` block contains a list of items with title,
+    url, and either an encrypted_content or page_age — we just need title+url.
+    """
+    for block in content_blocks:
+        # Block is an Anthropic SDK model — peek at the type via getattr.
+        btype = getattr(block, "type", None)
+        if btype != "web_search_tool_result":
+            continue
+        items = getattr(block, "content", None) or []
+        # The matching server_tool_use block carries the actual query — find it
+        # by tool_use_id sibling. Fallback to a generic label if missing.
+        query_label = "web search"
+        tool_use_id = getattr(block, "tool_use_id", None)
+        if tool_use_id:
+            for sib in content_blocks:
+                if getattr(sib, "type", None) == "server_tool_use" and getattr(sib, "id", None) == tool_use_id:
+                    query_label = (getattr(sib, "input", {}) or {}).get("query") or query_label
+                    break
+        results: list[dict[str, Any]] = []
+        for item in items:
+            url = getattr(item, "url", None) or ""
+            if not url:
+                continue
+            results.append({
+                "title": (getattr(item, "title", None) or url).strip(),
+                "url": url,
+                "snippet": (getattr(item, "page_age", None) or "").strip(),
+            })
+        if results:
+            await bus.publish("search_results", query=str(query_label)[:120], results=results)
 
 
 async def _generate_closing_line(prior_narrations: list[str]) -> str:

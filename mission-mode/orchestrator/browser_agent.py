@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import html
+import os
 import re
 import urllib.parse
 from typing import Any
@@ -136,66 +137,154 @@ async def _stream_frames(page: Page, stop: asyncio.Event) -> None:
             continue
 
 
-async def _ddg_fetch(query: str, max_results: int) -> list[dict[str, Any]]:
-    """Fetch real web results via DuckDuckGo's HTML endpoint (plain HTTP, no bot blocks).
+def _fetch_ddg_html(query: str, max_results: int) -> list[dict[str, Any]]:
+    """Fetch results from DuckDuckGo's HTML endpoint.
 
-    Returns up to max_results items of {title, url, snippet}.
+    DDG aggressively rate-limits with HTTP 202 + 'anomaly detection' page; treat
+    that case as zero results so the caller can try the next source.
     """
-    def _blocking() -> list[dict[str, Any]]:
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Referer": "https://html.duckduckgo.com/",
-        }
-        data = {"q": query, "b": "", "kl": "us-en"}
-        with httpx.Client(headers=headers, timeout=12.0, follow_redirects=True) as c:
-            r = c.post("https://html.duckduckgo.com/html/", data=data)
-            r.raise_for_status()
-            body = r.text
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Referer": "https://html.duckduckgo.com/",
+    }
+    data = {"q": query, "b": "", "kl": "us-en"}
+    with httpx.Client(headers=headers, timeout=12.0, follow_redirects=True) as c:
+        r = c.post("https://html.duckduckgo.com/html/", data=data)
+        # Don't raise on 202 — that's the documented anomaly response. Just
+        # return [] so the caller falls through.
+        if r.status_code == 202 or "anomaly" in r.text.lower()[:5000]:
+            return []
+        r.raise_for_status()
+        body = r.text
 
-        # Each result is <div class="result">...</div> containing <a class="result__a" href=...>
-        # and a sibling <a class="result__snippet"> with the description.
-        blocks = re.findall(
-            r'<div[^>]*class="result[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>\s*</div>',
-            body,
+    blocks = re.findall(
+        r'<div[^>]*class="result[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>\s*</div>',
+        body,
+    )
+    out: list[dict[str, Any]] = []
+    for blk in blocks:
+        m_title = re.search(
+            r'<a\s+rel="nofollow"\s+class="result__a"\s+href="([^"]+)"[^>]*>([\s\S]*?)</a>',
+            blk,
         )
-        out: list[dict[str, Any]] = []
-        for blk in blocks:
-            m_title = re.search(
-                r'<a\s+rel="nofollow"\s+class="result__a"\s+href="([^"]+)"[^>]*>([\s\S]*?)</a>',
-                blk,
-            )
-            if not m_title:
-                continue
-            url = html.unescape(m_title.group(1))
-            # DDG wraps external URLs in /l/?uddg=<encoded>
-            parsed = urllib.parse.urlparse(url)
-            if "duckduckgo.com" in parsed.netloc and parsed.path.startswith(("/l/", "/y.js")):
-                qs = urllib.parse.parse_qs(parsed.query)
-                real = qs.get("uddg", [""])[0]
-                if real:
-                    url = urllib.parse.unquote(real)
-            title = re.sub(r"<[^>]+>", "", m_title.group(2))
-            title = html.unescape(title).strip()
+        if not m_title:
+            continue
+        url = html.unescape(m_title.group(1))
+        parsed = urllib.parse.urlparse(url)
+        if "duckduckgo.com" in parsed.netloc and parsed.path.startswith(("/l/", "/y.js")):
+            qs = urllib.parse.parse_qs(parsed.query)
+            real = qs.get("uddg", [""])[0]
+            if real:
+                url = urllib.parse.unquote(real)
+        title = html.unescape(re.sub(r"<[^>]+>", "", m_title.group(2))).strip()
 
-            m_snip = re.search(
-                r'<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)</a>',
-                blk,
-            )
-            snippet = ""
-            if m_snip:
-                snippet = re.sub(r"<[^>]+>", "", m_snip.group(1))
-                snippet = html.unescape(snippet).strip()
+        m_snip = re.search(r'<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)</a>', blk)
+        snippet = ""
+        if m_snip:
+            snippet = html.unescape(re.sub(r"<[^>]+>", "", m_snip.group(1))).strip()
 
-            # Skip sponsored/ad slots that route through y.js
-            if "/y.js" in (m_title.group(1) or ""):
-                continue
+        if "/y.js" in (m_title.group(1) or ""):
+            continue
+        out.append({"title": title, "url": url, "snippet": snippet})
+        if len(out) >= max_results:
+            break
+    return out
 
-            out.append({"title": title, "url": url, "snippet": snippet})
-            if len(out) >= max_results:
-                break
-        return out
 
-    return await asyncio.to_thread(_blocking)
+def _fetch_ecosia(query: str, max_results: int) -> list[dict[str, Any]]:
+    """Ecosia organic results — used as fallback when DDG returns 0.
+
+    Ecosia has stable test-id selectors and isn't sharing DDG's rate-limit pool.
+    """
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=12.0, follow_redirects=True) as c:
+        r = c.get("https://www.ecosia.org/search", params={"q": query})
+        r.raise_for_status()
+        body = r.text
+
+    out: list[dict[str, Any]] = []
+    # Each organic result is wrapped in a container with data-test-id="organic-result".
+    # Slice the body at each container start so we can scope sub-extractions.
+    for m in re.finditer(
+        r'data-test-id="organic-result"[\s\S]*?(?=data-test-id="organic-result"|</main>)',
+        body,
+    ):
+        blk = m.group(0)
+        m_title = re.search(r'data-test-id="result-title"[^>]*>([\s\S]*?)</a>', blk)
+        m_url = re.search(r'data-test-id="result-link"[^>]*href="([^"]+)"', blk)
+        m_desc = re.search(r'data-test-id="result-description"[^>]*>([\s\S]*?)</', blk)
+        if not (m_title and m_url):
+            continue
+        title = html.unescape(re.sub(r"<[^>]+>", "", m_title.group(1))).strip()
+        url = html.unescape(m_url.group(1))
+        snippet = (
+            html.unescape(re.sub(r"<[^>]+>", "", m_desc.group(1))).strip() if m_desc else ""
+        )
+        out.append({"title": title, "url": url, "snippet": snippet})
+        if len(out) >= max_results:
+            break
+    return out
+
+
+async def _ddg_fetch(query: str, max_results: int) -> list[dict[str, Any]]:
+    """Fetch live web results via a fallback chain.
+
+    Industry-wide problem in 2026: DDG aggressively rate-limits HTML scraping
+    (HTTP 202 anomaly response). When DDG returns 0, fall through to Ecosia
+    (different rate-limit pool, stable test-id selectors). If a Brave Search
+    API key is set (BRAVE_SEARCH_API_KEY), Brave is preferred over both.
+    """
+    api_key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
+    if api_key:
+        try:
+            results = await asyncio.to_thread(_fetch_brave_api, query, max_results, api_key)
+            if results:
+                return results
+        except Exception as e:  # noqa: BLE001
+            print(f"[search] Brave API failed: {e}", flush=True)
+
+    try:
+        results = await asyncio.to_thread(_fetch_ddg_html, query, max_results)
+        if results:
+            return results
+    except Exception as e:  # noqa: BLE001
+        print(f"[search] DDG HTML failed: {e}", flush=True)
+
+    try:
+        results = await asyncio.to_thread(_fetch_ecosia, query, max_results)
+        if results:
+            print(f"[search] DDG returned 0 for {query!r}; Ecosia returned {len(results)}", flush=True)
+            return results
+    except Exception as e:  # noqa: BLE001
+        print(f"[search] Ecosia failed: {e}", flush=True)
+
+    return []
+
+
+def _fetch_brave_api(query: str, max_results: int, api_key: str) -> list[dict[str, Any]]:
+    """Brave Search API — clean JSON, no scraping. Free tier covers ~1000 queries/mo.
+
+    Set BRAVE_SEARCH_API_KEY in .env to enable. Falls through silently if absent.
+    """
+    with httpx.Client(timeout=12.0) as c:
+        r = c.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params={"q": query, "count": max_results},
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": api_key,
+            },
+        )
+        r.raise_for_status()
+        data = r.json()
+
+    out: list[dict[str, Any]] = []
+    for item in (data.get("web", {}) or {}).get("results", [])[:max_results]:
+        out.append({
+            "title": (item.get("title") or "").strip(),
+            "url": item.get("url") or "",
+            "snippet": (item.get("description") or "").strip(),
+        })
+    return out
 
 
 async def search_trip_options(query: str, max_results: int = 6) -> dict[str, Any]:
