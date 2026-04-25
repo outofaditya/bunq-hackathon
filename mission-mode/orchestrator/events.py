@@ -16,10 +16,11 @@ from collections import deque
 from typing import Any
 
 
-# These event types are emitted at very high frequency (per-token, per-frame)
-# and would dominate the replay buffer for new subscribers without adding value.
-_HISTORY_SKIP = {"agent_text_delta", "browser_frame"}
-_HISTORY_MAX = 500
+# Only state-snapshot events get buffered for replay on subscribe. Chat
+# stream + booking beats are live-only — replaying them would refill a
+# freshly-loaded dashboard with stale conversation as if it were new.
+_HISTORY_KEEP = {"balance_snapshot", "balance", "phase"}
+_HISTORY_MAX = 200
 
 
 class EventBus:
@@ -57,7 +58,7 @@ class EventBus:
 
     async def publish(self, event_type: str, **payload: Any) -> None:
         msg = json.dumps({"type": event_type, **payload})
-        if event_type not in _HISTORY_SKIP:
+        if event_type in _HISTORY_KEEP:
             self._history.append(msg)
         for q in list(self._subscribers):
             try:
