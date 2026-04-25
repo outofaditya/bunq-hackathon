@@ -20,39 +20,52 @@
   --color-paper-900: #0E0E0D;
   --color-paper-950: #0A0A08;
 
-  /* Punctual brand */
-  --color-ink:      #1A1916;
+  /* Punctual brand — bumped saturation, kept the muted base */
+  --color-ink:      #14130F;
   --color-stone:    #6E6C66;
-  --color-punctual: #4A5A7A;
+  --color-punctual: #6E7DDC;            /* lifted from muted blue-gray to indigo */
 
-  /* Punctual semantic status (dots, never backgrounds) */
-  --color-status-complete:  #5B8F6E;
-  --color-status-upcoming:  #C8995A;
-  --color-status-overdue:   #B8655A;
-  --color-status-scheduled: #5A7FA8;
-  --color-status-project:   #7A6B9E;
-  --color-status-priority:  #C4785C;
+  /* Vibrant accent set — used sparingly for highlights, hover glows, and gradients */
+  --color-accent-coral:    #FF6F8F;     /* hot coral / pink for primary calls-to-action */
+  --color-accent-mint:     #4FE3C1;     /* turquoise for "live" / scanning indicators */
+  --color-accent-amber:    #FFB453;     /* warm amber for sustainability / money-positive */
+  --color-accent-violet:   #B788FF;     /* lavender for AI-generated / vision callouts */
+  --color-accent-sky:      #69B3FF;     /* sky-blue for browser-agent / source links */
 
-  /* ShadCN semantic contract — re-mapped through Punctual */
-  --color-background:           #0E0E0D;
-  --color-foreground:           #EDEBE5;
-  --color-card:                 #161614;
-  --color-card-foreground:      #EDEBE5;
-  --color-popover:              #1E1E1C;
-  --color-popover-foreground:   #EDEBE5;
-  --color-primary:              #4A5A7A;
-  --color-primary-foreground:   #FAFAF9;
-  --color-secondary:            #1E1E1C;
-  --color-secondary-foreground: #EDEBE5;
-  --color-muted:                #1E1E1C;
-  --color-muted-foreground:     #68655F;
-  --color-accent:               #1E1E1C;
-  --color-accent-foreground:    #EDEBE5;
-  --color-destructive:          #B8655A;
-  --color-destructive-foreground: #FAFAF9;
-  --color-border:               #2A2A28;
-  --color-input:                #2A2A28;
-  --color-ring:                 #4A5A7A;
+  /* Composite gradients (CSS strings, used via background-image) */
+  --gradient-hero:   linear-gradient(135deg, #FF6F8F 0%, #B788FF 50%, #6E7DDC 100%);
+  --gradient-warm:   linear-gradient(135deg, #FFB453 0%, #FF6F8F 100%);
+  --gradient-cool:   linear-gradient(135deg, #4FE3C1 0%, #69B3FF 100%);
+  --gradient-glass:  linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0) 100%);
+
+  /* Punctual semantic status — bumped slightly more saturated for legibility on dark */
+  --color-status-complete:  #5BCB8F;
+  --color-status-upcoming:  #FFB453;
+  --color-status-overdue:   #FF6F8F;
+  --color-status-scheduled: #69B3FF;
+  --color-status-project:   #B788FF;
+  --color-status-priority:  #FF8A5C;
+
+  /* ShadCN semantic contract — re-mapped through Punctual + accents */
+  --color-background:           #0A0913;
+  --color-foreground:           #F2EFE8;
+  --color-card:                 #14121F;
+  --color-card-foreground:      #F2EFE8;
+  --color-popover:              #1B1929;
+  --color-popover-foreground:   #F2EFE8;
+  --color-primary:              #FF6F8F;            /* coral CTA */
+  --color-primary-foreground:   #14121F;
+  --color-secondary:            #1B1929;
+  --color-secondary-foreground: #F2EFE8;
+  --color-muted:                #1B1929;
+  --color-muted-foreground:     #8E89A6;
+  --color-accent:               #1B1929;
+  --color-accent-foreground:    #F2EFE8;
+  --color-destructive:          #FF6F8F;
+  --color-destructive-foreground: #14121F;
+  --color-border:               #2A2638;
+  --color-input:                #2A2638;
+  --color-ring:                 #B788FF;
 
   /* Typography */
   --font-sans:  ui-sans-serif, "SF Pro Text", "Inter", system-ui, sans-serif;
@@ -92,12 +105,108 @@
 
 @layer base {
   html, body { font-family: var(--font-sans); }
-  body { font-size: 13.5px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
-  ::selection { background: var(--color-punctual); color: #fff; }
+  body {
+    font-size: 13.5px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+    /* Subtle gradient field — softens the flat dark base without competing with cards. */
+    background:
+      radial-gradient(ellipse 80% 60% at 0% 0%,    rgba(183, 136, 255, 0.10) 0%, transparent 55%),
+      radial-gradient(ellipse 70% 60% at 100% 0%,  rgba(255, 111, 143, 0.08) 0%, transparent 55%),
+      radial-gradient(ellipse 90% 70% at 50% 110%, rgba(105, 179, 255, 0.07) 0%, transparent 55%),
+      var(--color-background);
+    background-attachment: fixed;
+  }
+  ::selection { background: var(--color-accent-coral); color: #fff; }
 
   *::-webkit-scrollbar { width: 8px; height: 8px; }
-  *::-webkit-scrollbar-thumb { background: var(--color-paper-700); border-radius: 9999px; }
+  *::-webkit-scrollbar-thumb { background: var(--color-paper-700); border-radius: 9999px; transition: background 200ms; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--color-accent-coral); }
   *::-webkit-scrollbar-track { background: transparent; }
+}
+
+/* === Animations === */
+
+/* Camera scan-line animation for the receipt scanner overlay */
+@keyframes scanline {
+  0%   { transform: translateY(0%); }
+  100% { transform: translateY(calc(var(--scan-h, 320px) * 1)); }
+}
+@keyframes scanlinePct {
+  0%   { top: 0%;   opacity: 0.95; }
+  50%  { top: 100%; opacity: 0.6; }
+  100% { top: 0%;   opacity: 0.95; }
+}
+
+/* Slow rotating gradient — used on the idle mic halo and other hero elements */
+@keyframes gradientSpin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Soft pulse for live indicators */
+@keyframes softPulse {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.04); }
+}
+
+/* Sliding shimmer used on hovered rows / cards */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+/* === Reusable utilities === */
+
+@utility hover-lift {
+  transition: transform 220ms var(--ease-punctual), box-shadow 220ms var(--ease-punctual), border-color 220ms var(--ease-punctual);
+}
+@utility hover-lift {
+  &:hover {
+    transform: translateY(-2px) scale(1.012);
+    box-shadow: 0 14px 36px -8px rgba(255, 111, 143, 0.18), 0 2px 0 rgba(255,255,255,0.04) inset;
+  }
+}
+
+@utility hover-glow-coral {
+  transition: box-shadow 220ms var(--ease-punctual), transform 220ms var(--ease-punctual);
+}
+@utility hover-glow-coral {
+  &:hover {
+    box-shadow: 0 0 0 1px rgba(255, 111, 143, 0.35), 0 16px 40px -10px rgba(255, 111, 143, 0.45);
+    transform: translateY(-2px);
+  }
+}
+
+@utility hover-glow-violet {
+  transition: box-shadow 220ms var(--ease-punctual), transform 220ms var(--ease-punctual);
+}
+@utility hover-glow-violet {
+  &:hover {
+    box-shadow: 0 0 0 1px rgba(183, 136, 255, 0.35), 0 16px 40px -10px rgba(183, 136, 255, 0.45);
+    transform: translateY(-2px);
+  }
+}
+
+@utility hover-zoom {
+  transition: transform 200ms var(--ease-punctual);
+}
+@utility hover-zoom {
+  &:hover { transform: scale(1.06); }
+  &:active { transform: scale(0.97); }
+}
+
+@utility gradient-text {
+  background: var(--gradient-hero);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+@utility glass {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid rgba(255,255,255,0.06);
 }
 
 @utility tabular {

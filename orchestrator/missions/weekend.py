@@ -36,15 +36,63 @@ here.
 6. `send_slack_message(message="Friday. Don't plan anything. Trust me.", header="<partner> 🌹")`
    — Replace <partner> with the partner's name from the user's mission prompt.
 
-After step 6, call `finish_mission(summary="...")` with one short line like:
-"€<dinner+40> already sent, €120 tickets pending your approval. Calendar
-posted, partner notified."
+7. Sustainability donation (FINAL pre-finish step)
+   Compute `total_spent` as a NUMBER you derive yourself — do NOT make a
+   tool call for this. It is the sum of the `amount_eur` you supplied to
+   pay_vendor in steps 2 and 4 (restaurant price + €40 Uber). EXCLUDE
+   the €120 ticket draft from step 3 — that hasn't been approved.
+   Pick `donation_eur`: round to the nearest €1 or €0.50, target 3–5% of
+   `total_spent` (e.g. €5 when total ≈ €120, €8 when ≈ €180).
+
+   Make ONE tool call:
+     confirm_donation(
+       amount_eur     = <donation_eur>,
+       total_spent_eur= <total_spent>,
+       cause          = "Trees for All",
+       prompt_line    = <freshly written line, see rules below>
+     )
+   This BLOCKS until the user replies. The dashboard auto-opens the mic.
+   Returns `decision` ∈ 'yes' | 'no' | 'unsure' | 'timeout'.
+
+   *prompt_line* — write this fresh EVERY run, in your own voice. Do NOT use
+   the template "Spent X euros on Y. Add Z to <cause>". That phrasing is
+   played out. Treat it like a friend gently nudging you. Vary the OPENER,
+   the verb, the framing. ≤16 words. No quotes, no emoji, contraction
+   welcome. The actual euro figures ARE allowed. Examples (illustrative
+   only — DO NOT reuse verbatim):
+     "Friday's planted. Want to plant a few trees too — five for Trees for All?"
+     "Nice one. Round it up with five for Trees for All?"
+     "Big night ahead. Throw five at Trees for All while we're feeling generous?"
+     "We could match the vibe — five euros for Trees for All. Yes?"
+
+   Branch on the decision:
+   - 'yes': make ONE pay_vendor call to send the donation:
+       pay_vendor(amount_eur=<donation_eur>, vendor_name="Trees for All",
+                  description="🌱 Sustainability — Surprise Weekend match")
+     Then `narrate` ONE warm acknowledgment. Vary it — don't keep saying
+     "Trees planted." Examples: "Sent. Doing some good." / "There it goes,
+     thanks for that." / "Done. The planet says hi."
+   - any other value: skip the pay_vendor and `narrate` ONE casual line
+     with no guilt-trip. Examples: "All good, maybe next time." / "Fair
+     enough. Skipping it." / "Got it. We're done here."
+
+After step 7, call `finish_mission(summary="...")` with one short line like:
+"€<total_spent> sent, €120 tickets pending your approval. <Donation note if any>."
+This is the LAST tool call of the mission.
 
 __NARRATION_STYLE__
 
 # Hard rules
-- Never call a tool twice for the same step.
-- Never ask the user anything. The plan is fixed.
+- Steps 1-6 each run exactly ONCE. Once you have a result from a tool, USE
+  THAT VALUE for later steps — DO NOT call the same tool again to "refresh"
+  it. In particular: book_restaurant runs ONCE; the price/name it returned
+  must be reused in later steps without re-calling the tool.
+- After confirm_donation returns, the ONLY remaining tool calls allowed
+  are: at most one `pay_vendor` (for the Trees for All donation, if the
+  user said yes), at most one `narrate`, and exactly one `finish_mission`.
+  Do NOT call book_restaurant, create_draft_payment, create_calendar_event,
+  send_slack_message, or any other tool after confirm_donation has run.
+- Never ask the user anything in steps 1-6. The plan is fixed.
 - If a tool errors, narrate a one-line fallback and continue to the next step.
 - Do NOT call `create_bunqme_link`, `request_money`, or
   `schedule_recurring_payment` in this mission. All money moves from

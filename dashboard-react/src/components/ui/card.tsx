@@ -5,7 +5,14 @@ const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElemen
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("rounded-xl border border-border bg-card text-card-foreground", className)}
+      className={cn(
+        // Glass-y card surface with a soft transition. Children that want a
+        // hover state can opt in with the `hover-lift` utility.
+        "rounded-xl border border-border/80 bg-card/85 text-card-foreground backdrop-blur-sm",
+        "shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_8px_24px_-12px_rgba(0,0,0,0.45)]",
+        "transition-[border-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)]",
+        className,
+      )}
       {...props}
     />
   )

@@ -68,6 +68,169 @@ _toolbox: BunqToolbox | None = None
 _public_url: str | None = None
 _mission_thread: threading.Thread | None = None
 
+# Bridge for the post-mission donation prompt — agent_loop blocks on this
+# event; /missions/donate/confirm fills the slot and releases the wait.
+_donation_event: threading.Event = threading.Event()
+_donation_slot: dict[str, Any] | None = None
+
+# Bridge for the tax-invoice scanner — the worker thread blocks on this
+# event after asking the user out loud whether to pay; /missions/tax/confirm
+# fills the slot and releases the wait.
+_tax_confirm_event: threading.Event = threading.Event()
+_tax_confirm_slot: dict[str, Any] | None = None
+_tax_thread: threading.Thread | None = None
+
+
+def _extract_tax_fields(image_bytes: bytes) -> dict[str, Any]:
+    """Run Claude Vision over a tax-invoice photo and extract payment fields.
+
+    Returns a dict with keys: iban, bic, recipient, amount_eur, description.
+    Any field that can't be read clearly is None.
+    """
+    import base64
+    import json as _json
+
+    img_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+    media_type = "image/jpeg"
+    # Quick magic-byte sniff so PNG/JPEG both work without a dedicated lib.
+    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        media_type = "image/png"
+
+    client = anthropic.Anthropic()
+    # Sonnet is markedly more reliable than Haiku for handwriting OCR; keep it
+    # configurable so the user can override via env.
+    vision_model = os.getenv("ANTHROPIC_VISION_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6"
+
+    prompt = (
+        "You are extracting payment details from a photo of a tax invoice or "
+        "bill. Read both PRINTED and HANDWRITTEN text carefully.\n\n"
+        "Return ONLY a JSON object with these fields (use null if a field is "
+        "not legible):\n"
+        '  "iban": "<full IBAN, country prefix included, NO spaces, e.g. NL91ABNA0417164300>",\n'
+        '  "bic": "<8 or 11 char BIC/SWIFT code, e.g. ABNANL2A>",\n'
+        '  "recipient": "<name of the entity demanding payment — government '
+        'agency like Belastingdienst / Gemeente Amsterdam, or a personal '
+        'name>",\n'
+        '  "amount_eur": <number with at most 2 decimals>,\n'
+        '  "description": "<short reference: invoice number, period, OZB year, etc.>"\n\n'
+        "Strict rules:\n"
+        "- Output ONLY the JSON object. No prose.\n"
+        "- Spaces removed from the IBAN.\n"
+        "- amount_eur must be a number, not a string.\n"
+        "- If you cannot find a field, the value is null."
+    )
+
+    try:
+        resp = client.messages.create(
+            model=vision_model,
+            max_tokens=512,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": img_b64},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"vision call failed: {e}"}
+
+    text = ""
+    for b in resp.content:
+        if getattr(b, "type", None) == "text":
+            text += b.text
+    text = text.strip()
+    # Strip markdown fencing if Claude wrapped it.
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip().rstrip("`").strip()
+
+    try:
+        data = _json.loads(text)
+    except _json.JSONDecodeError:
+        # As a last resort, try to slice from first { to last } in case
+        # extra text snuck in.
+        s, e = text.find("{"), text.rfind("}")
+        if s >= 0 and e > s:
+            try:
+                data = _json.loads(text[s : e + 1])
+            except _json.JSONDecodeError:
+                return {"error": "vision returned non-JSON", "raw": text[:240]}
+        else:
+            return {"error": "vision returned non-JSON", "raw": text[:240]}
+
+    # Normalise.
+    iban = data.get("iban")
+    iban = iban.replace(" ", "").upper() if isinstance(iban, str) else None
+    amount = data.get("amount_eur")
+    try:
+        amount_f = float(amount) if amount is not None else None
+    except (TypeError, ValueError):
+        amount_f = None
+    return {
+        "iban":        iban,
+        "bic":         (data.get("bic") or "").upper().strip() or None if isinstance(data.get("bic"), str) else data.get("bic"),
+        "recipient":   data.get("recipient"),
+        "amount_eur":  amount_f,
+        "description": data.get("description"),
+    }
+
+
+def _classify_yes_no(transcript: str) -> tuple[str, float]:
+    """Cheap keyword classifier for the donation confirmation. Returns (decision, confidence)."""
+    import re as _re
+    t = (transcript or "").lower().strip()
+    if not t:
+        return "unsure", 0.0
+    no_kw = ["no", "nope", "nah", "skip", "cancel", "stop", "don't", "do not",
+             "never mind", "nevermind", "abort", "not now", "not really", "no thanks"]
+    for kw in no_kw:
+        if " " in kw:
+            if kw in t:
+                return "no", 0.9
+        elif _re.search(rf"\b{_re.escape(kw)}\b", t):
+            return "no", 0.9
+    yes_kw = ["yes", "yeah", "yep", "yup", "sure", "okay", "ok", "do it", "go ahead",
+              "let's do it", "alright", "fine", "donate", "go for it", "sounds good",
+              "i'm in", "round up"]
+    for kw in yes_kw:
+        if " " in kw:
+            if kw in t:
+                return "yes", 0.85
+        elif _re.search(rf"\b{_re.escape(kw)}\b", t):
+            return "yes", 0.85
+    # Haiku fallback for ambiguous answers.
+    try:
+        client = anthropic.Anthropic()
+        model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip() or "claude-haiku-4-5-20251001"
+        resp = client.messages.create(
+            model=model,
+            max_tokens=4,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "The user is being asked whether to make a small charitable donation. "
+                    "Reply with exactly one word: yes, no, or unsure.\n\n"
+                    f"User said: {transcript}"
+                ),
+            }],
+        )
+        text = ""
+        for b in resp.content:
+            if getattr(b, "type", None) == "text":
+                text += b.text
+        word = text.strip().lower().split()[0] if text.strip() else "unsure"
+        if word in ("yes", "no"):
+            return word, 0.7
+    except Exception:  # noqa: BLE001
+        pass
+    return "unsure", 0.4
+
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -276,17 +439,36 @@ async def start_mission_from_voice(name: str, request: Request) -> dict[str, Any
 
 
 def _classify_mission(transcript: str) -> str:
-    """Map a free-text spoken command to one of weekend/payday/travel."""
+    """Map a free-text spoken command to one of weekend/payday/travel/tax."""
     transcript = (transcript or "").strip()
     if not transcript:
         return "weekend"
-    # Cheap keyword fast-path before we burn an LLM token.
     t = transcript.lower()
-    if any(k in t for k in ["payday", "salary", "rent", "bills", "monthly", "duwo"]):
+    # Tax / receipt — usually triggered by the camera button, but voice works too.
+    if any(k in t for k in [
+        "tax", "invoice", "receipt", "scan", "bill", "ozb", "belasting",
+        "belastingdienst", "pay this", "scan this", "scan a receipt",
+        "scan the bill", "scan a bill", "the document", "this document",
+        "pay the invoice",
+    ]):
+        return "tax"
+    if any(k in t for k in [
+        "payday", "salary", "rent", "bills", "monthly", "duwo", "autopay",
+        "set up bills", "lock in bills", "pay rent", "monthly bills",
+        "auto pay", "schedule rent", "subscription", "pension",
+    ]):
         return "payday"
-    if any(k in t for k in ["fly", "flight", "trip", "travel", "tokyo", "abroad", "vacation", "holiday"]):
+    if any(k in t for k in [
+        "fly", "flight", "trip", "travel", "tokyo", "abroad", "vacation",
+        "holiday", "going away", "flying out", "going overseas", "freeze the card",
+        "freeze my card", "book a hotel", "hotel for", "leaving for",
+    ]):
         return "travel"
-    if any(k in t for k in ["weekend", "dinner", "restaurant", "concert", "sara", "surprise"]):
+    if any(k in t for k in [
+        "weekend", "dinner", "restaurant", "concert", "sara", "surprise",
+        "date night", "anniversary", "treat", "book a table", "book dinner",
+        "saturday night", "friday night", "girlfriend", "boyfriend", "partner",
+    ]):
         return "weekend"
 
     # Fallback: ask Claude. Cheap Haiku call.
@@ -300,7 +482,11 @@ def _classify_mission(transcript: str) -> str:
                 "role": "user",
                 "content": (
                     "Classify the user's spoken command into ONE mission name and reply with "
-                    "exactly that word and nothing else: weekend, payday, travel.\n\n"
+                    "exactly that word and nothing else: weekend, payday, travel, tax.\n"
+                    "  weekend = surprise / date night / dinner+concert\n"
+                    "  payday  = monthly bills, rent, salary, autopay setup\n"
+                    "  travel  = trip, flight, hotel, going abroad\n"
+                    "  tax     = scanning a tax invoice or bill\n\n"
                     f"Command: {transcript}"
                 ),
             }],
@@ -310,7 +496,7 @@ def _classify_mission(transcript: str) -> str:
             if getattr(b, "type", None) == "text":
                 text += b.text
         text = text.strip().lower().split()[0] if text.strip() else "weekend"
-        return text if text in ("weekend", "payday", "travel") else "weekend"
+        return text if text in ("weekend", "payday", "travel", "tax") else "weekend"
     except Exception:
         return "weekend"
 
@@ -593,6 +779,213 @@ async def state() -> dict[str, Any]:
         "history": bus._history,
         "mission_running": bool(_mission_thread and _mission_thread.is_alive()),
     }
+
+
+@app.post("/missions/tax/scan")
+async def tax_scan(image: UploadFile = File(...)) -> dict[str, Any]:
+    """Receive a photo of a tax invoice. Kick off the worker that:
+      1. Runs Claude Vision to extract IBAN/BIC/recipient/amount
+      2. Speaks a confirmation question via TTS
+      3. Opens the user's mic (frontend reacts to `awaiting_tax_confirm`)
+      4. Waits for /missions/tax/confirm
+      5. On YES, fires a real bunq IBAN payment
+    """
+    global _tax_thread
+    if _tax_thread is not None and _tax_thread.is_alive():
+        return {"ok": False, "error": "A tax scan is already in progress."}
+    if _mission_thread is not None and _mission_thread.is_alive():
+        return {"ok": False, "error": "A mission is already running — finish it first."}
+
+    image_bytes = await image.read()
+    if not image_bytes:
+        return {"ok": False, "error": "Empty image upload"}
+    if len(image_bytes) > 8 * 1024 * 1024:
+        return {"ok": False, "error": "Image too large (>8 MB)"}
+
+    bus.reset()
+    bus.publish("mission_started", {"model": "claude-vision", "user_prompt": "(receipt scan)"})
+    bus.publish("tax_scan_started", {"size_bytes": len(image_bytes)})
+
+    def _run() -> None:
+        global _tax_confirm_slot
+        try:
+            tb = _get_toolbox()
+
+            # 1. Vision extraction
+            from .tts import synthesize_narration  # noqa: PLC0415
+            print(f"[tax] vision OCR on {len(image_bytes)}-byte image…", flush=True)
+            extracted = _extract_tax_fields(image_bytes)
+
+            if "error" in extracted:
+                bus.publish("tax_scan_error", {"error": extracted["error"], "raw": extracted.get("raw", "")})
+                bus.publish("mission_error", {"error": extracted["error"]})
+                return
+
+            iban = extracted.get("iban")
+            amount = extracted.get("amount_eur")
+            recipient = extracted.get("recipient") or "the recipient"
+            description = extracted.get("description") or "Tax invoice"
+
+            bus.publish("tax_extracted", {
+                "iban":        iban,
+                "bic":         extracted.get("bic"),
+                "recipient":   recipient,
+                "amount_eur":  amount,
+                "description": description,
+            })
+
+            if not iban or not amount or amount <= 0:
+                msg = "Couldn't read the IBAN or amount. Try a clearer shot."
+                bus.publish("narrate", {"text": msg})
+                try:
+                    fname = synthesize_narration(msg)
+                    bus.publish("narrate_audio", {"text": msg, "url": f"/tts/{fname}"})
+                except Exception:  # noqa: BLE001
+                    pass
+                bus.publish("mission_complete", {"summary": "Scan failed — fields incomplete."})
+                return
+
+            # 2. Speak the confirmation question first
+            amount_str = f"{amount:.2f}".rstrip("0").rstrip(".") or "0"
+            question = f"Looks like a {amount_str} euro invoice from {recipient}. Pay it?"
+            bus.publish("narrate", {"text": question})
+            try:
+                fname = synthesize_narration(question)
+                bus.publish("narrate_audio", {"text": question, "url": f"/tts/{fname}"})
+            except Exception as e:  # noqa: BLE001
+                bus.publish("narrate_audio_error", {"text": question, "error": str(e)})
+
+            # Sleep enough for the audio to play before opening the mic.
+            words = max(1, len(question.split()))
+            time.sleep(max(3.0, words / 2.3 + 1.2))
+
+            # 3. Open the mic
+            timeout_s = 22.0
+            bus.publish("awaiting_tax_confirm", {
+                "question":   question,
+                "iban":       iban,
+                "amount_eur": amount,
+                "recipient":  recipient,
+                "timeout_s":  timeout_s,
+            })
+
+            _tax_confirm_event.clear()
+            _tax_confirm_slot = None
+            got = _tax_confirm_event.wait(timeout=timeout_s)
+            slot = _tax_confirm_slot
+
+            if not got or not slot:
+                msg = "Didn't hear a yes. Holding off — nothing was paid."
+                bus.publish("narrate", {"text": msg})
+                try:
+                    fname = synthesize_narration(msg)
+                    bus.publish("narrate_audio", {"text": msg, "url": f"/tts/{fname}"})
+                except Exception:  # noqa: BLE001
+                    pass
+                bus.publish("tax_payment_skipped", {"reason": "timeout"})
+                bus.publish("mission_complete", {"summary": "Tax scan — held off."})
+                return
+
+            decision = slot.get("decision", "unsure")
+            if decision != "yes":
+                msg = "Skipped. Nothing was paid."
+                bus.publish("narrate", {"text": msg})
+                try:
+                    fname = synthesize_narration(msg)
+                    bus.publish("narrate_audio", {"text": msg, "url": f"/tts/{fname}"})
+                except Exception:  # noqa: BLE001
+                    pass
+                bus.publish("tax_payment_skipped", {"reason": decision})
+                bus.publish("mission_complete", {"summary": "Tax scan — skipped."})
+                return
+
+            # 4. Make the bunq payment
+            try:
+                tb.snapshot_balance("tax_pre_pay")
+                payment = tb.pay_via_iban(
+                    amount_eur=float(amount),
+                    iban=iban,
+                    recipient_name=recipient,
+                    description=f"Tax invoice — {description}"[:140],
+                )
+                tb.snapshot_balance("tax_paid")
+                bus.publish("tax_payment_complete", payment)
+                close_msg = f"Sent {amount_str} to {recipient}. You're square."
+                bus.publish("narrate", {"text": close_msg})
+                try:
+                    fname = synthesize_narration(close_msg)
+                    bus.publish("narrate_audio", {"text": close_msg, "url": f"/tts/{fname}"})
+                except Exception:  # noqa: BLE001
+                    pass
+                bus.publish("mission_complete", {"summary": close_msg})
+            except Exception as e:  # noqa: BLE001
+                err = f"Payment failed: {e}"
+                bus.publish("tax_payment_error", {"error": str(e)})
+                bus.publish("narrate", {"text": "Payment didn't go through. Hang on a sec."})
+                bus.publish("mission_error", {"error": err})
+
+        except Exception as e:  # noqa: BLE001
+            bus.publish("tax_scan_error", {"error": str(e)})
+            bus.publish("mission_error", {"error": str(e)})
+
+    _tax_thread = threading.Thread(target=_run, daemon=True, name="mission-tax")
+    _tax_thread.start()
+    return {"ok": True, "mission": "tax", "size_bytes": len(image_bytes)}
+
+
+@app.post("/missions/tax/confirm")
+async def tax_confirm(audio: UploadFile = File(...)) -> dict[str, Any]:
+    """Receive the user's spoken yes/no for paying a scanned tax invoice."""
+    global _tax_confirm_slot
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        return {"ok": False, "error": "Empty audio upload"}
+    try:
+        transcript = transcribe_bytes(audio_bytes, filename=audio.filename or "tax-confirm.webm")
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"STT failed: {e}"}
+    decision, confidence = _classify_yes_no(transcript)
+    _tax_confirm_slot = {
+        "transcript": transcript,
+        "decision":   decision,
+        "confidence": confidence,
+    }
+    bus.publish("tax_confirm_received", {
+        "transcript": transcript,
+        "decision":   decision,
+        "confidence": confidence,
+    })
+    _tax_confirm_event.set()
+    return {"ok": True, "transcript": transcript, "decision": decision, "confidence": confidence}
+
+
+@app.post("/missions/donate/confirm")
+async def donate_confirm(audio: UploadFile = File(...)) -> dict[str, Any]:
+    """Receive the user's spoken yes/no for the post-mission sustainability
+    donation. Transcribes, classifies, fills the bridge slot so the agent
+    loop's `confirm_donation` tool can return.
+    """
+    global _donation_slot
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        return {"ok": False, "error": "Empty audio upload"}
+    try:
+        transcript = transcribe_bytes(audio_bytes, filename=audio.filename or "donate.webm")
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"STT failed: {e}"}
+    decision, confidence = _classify_yes_no(transcript)
+    _donation_slot = {
+        "transcript": transcript,
+        "decision":   decision,
+        "confidence": confidence,
+    }
+    bus.publish("donation_decision_received", {
+        "transcript": transcript,
+        "decision":   decision,
+        "confidence": confidence,
+    })
+    _donation_event.set()
+    return {"ok": True, "transcript": transcript, "decision": decision, "confidence": confidence}
 
 
 # ----------------------------------------------------------------------

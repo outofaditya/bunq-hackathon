@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { Mic, Sparkles, Wifi, WifiOff } from "lucide-react";
+import { Camera, Mic, Sparkles, Wifi, WifiOff } from "lucide-react";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CascadeRow } from "@/components/CascadeRow";
 import { MicDialog } from "@/components/MicDialog";
+import { CameraDialog } from "@/components/CameraDialog";
 import { BrowserPanel, type BrowserPanelState } from "@/components/BrowserPanel";
+import { SourceSidebar, SOURCES_BY_MISSION } from "@/components/SourceSidebar";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { useEventBus } from "@/hooks/useEventBus";
 import { useMicRecorder } from "@/hooks/useMicRecorder";
 import { audioQueue, fxBuzz, fxChime, fxDoneStep, fxTick, fxZoom } from "@/lib/audio-fx";
 import { cn, fmtEur } from "@/lib/utils";
-import type { BusEvent, CascadeRow as Row, HealthInfo } from "@/lib/types";
+import type { BusEvent, CascadeRow as Row, HealthInfo, TaxExtraction } from "@/lib/types";
 
 // =================== cascade reducer ===================
 type CascadeState = { rows: Row[]; inFlight: string[] };
@@ -111,6 +113,26 @@ export function App() {
   const [narration, setNarration] = useState<string | null>(null);
   const [micOpen, setMicOpen] = useState(false);
   const [view, setView] = useState<ViewState>("idle");
+  // Sustainability donation prompt at the end of every mission.
+  const [donationPrompt, setDonationPrompt] = useState<{
+    prompt_line: string; amount_eur: number; total_spent_eur: number; cause: string;
+    totalSeconds: number; startedAt: number;
+  } | null>(null);
+  const [donationDecision, setDonationDecision] = useState<{
+    transcript: string; decision: string;
+  } | null>(null);
+  const [donateOpen, setDonateOpen] = useState(false);
+  // Tax invoice scanner.
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [taxScanState, setTaxScanState] = useState<"idle" | "scanning" | "scanned" | "error">("idle");
+  const [taxScanMessage, setTaxScanMessage] = useState<string | null>(null);
+  const [taxExtracted, setTaxExtracted] = useState<TaxExtraction | null>(null);
+  const [taxAwaiting, setTaxAwaiting] = useState<{ question: string; iban: string; amount_eur: number; recipient: string } | null>(null);
+  const [taxConfirmOpen, setTaxConfirmOpen] = useState(false);
+  // Active mission name (drives the SourceSidebar) + how many sources have
+  // "lit up" so far (one per completed step, capped to the source-set length).
+  const [currentMission, setCurrentMission] = useState<string | null>(null);
+  const [sourceHighlight, setSourceHighlight] = useState(0);
   const narrationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const newId = () => `r-${++idCounter.current}`;
@@ -122,6 +144,74 @@ export function App() {
       setMicOpen(false);
     },
   });
+
+  // Second recorder dedicated to the donation yes/no — uploads to a different
+  // endpoint with no extra fields.
+  const donationMic = useMicRecorder({
+    maxDurationSec: 10,
+    uploadFn: async (blob, mime) => {
+      const ext = mime.includes("webm") ? "webm" : mime.includes("mp4") ? "m4a" : mime.includes("ogg") ? "ogg" : "bin";
+      const fd = new FormData();
+      fd.append("audio", blob, `donate.${ext}`);
+      const r = await fetch("/missions/donate/confirm", { method: "POST", body: fd });
+      return r.json();
+    },
+    onTranscribed: (resp) => {
+      setDonateOpen(false);
+      if (!resp.ok) alert("Donation reply upload failed: " + (resp.error || "unknown"));
+    },
+  });
+  const onDonateCancel = useCallback(() => { donationMic.cancel(); setDonateOpen(false); }, [donationMic]);
+
+  // Recorder for the tax-invoice confirmation prompt — uploads to its own
+  // endpoint so the server's bridge state doesn't get crossed with donations.
+  const taxMic = useMicRecorder({
+    maxDurationSec: 10,
+    uploadFn: async (blob, mime) => {
+      const ext = mime.includes("webm") ? "webm" : mime.includes("mp4") ? "m4a" : mime.includes("ogg") ? "ogg" : "bin";
+      const fd = new FormData();
+      fd.append("audio", blob, `tax-confirm.${ext}`);
+      const r = await fetch("/missions/tax/confirm", { method: "POST", body: fd });
+      return r.json();
+    },
+    onTranscribed: (resp) => {
+      setTaxConfirmOpen(false);
+      if (!resp.ok) alert("Tax confirm upload failed: " + (resp.error || "unknown"));
+    },
+  });
+  const onTaxConfirmCancel = useCallback(() => { taxMic.cancel(); setTaxConfirmOpen(false); }, [taxMic]);
+
+  const onCameraOpen = useCallback(() => {
+    setTaxScanState("idle");
+    setTaxScanMessage(null);
+    setTaxExtracted(null);
+    setTaxAwaiting(null);
+    setCameraOpen(true);
+  }, []);
+
+  const onCameraCancel = useCallback(() => { setCameraOpen(false); }, []);
+
+  const onCameraCapture = useCallback(async (blob: Blob) => {
+    setTaxScanState("scanning");
+    setTaxScanMessage("Reading the invoice…");
+    try {
+      const fd = new FormData();
+      fd.append("image", blob, "receipt.jpg");
+      const r = await fetch("/missions/tax/scan", { method: "POST", body: fd });
+      const j = await r.json();
+      if (!j.ok) {
+        setTaxScanState("error");
+        setTaxScanMessage("Scan failed: " + (j.error || "unknown"));
+        return;
+      }
+      // Server will fire `tax_extracted` and `awaiting_tax_confirm` shortly.
+      setTaxScanMessage("Got the photo — extracting fields…");
+    } catch (e: unknown) {
+      setTaxScanState("error");
+      const msg = e instanceof Error ? e.message : "upload failed";
+      setTaxScanMessage("Upload failed: " + msg);
+    }
+  }, []);
 
   const onMicClick = useCallback(async () => {
     setMicOpen(true);
@@ -141,6 +231,14 @@ export function App() {
     setBrowser({ visible: false, line: "", step: "step 0", shotData: null, changing: false });
     setDraft(null);
     setSummary(null);
+    setDonationPrompt(null);
+    setDonationDecision(null);
+    setTaxScanState("idle");
+    setTaxScanMessage(null);
+    setTaxExtracted(null);
+    setTaxAwaiting(null);
+    setCurrentMission(null);
+    setSourceHighlight(0);
     audioQueue.reset();
     setView("idle");
   }, []);
@@ -153,6 +251,9 @@ export function App() {
         setBrowser({ visible: false, line: "", step: "step 0", shotData: null, changing: false });
         setDraft(null);
         setSummary(null);
+        setDonationPrompt(null);
+        setDonationDecision(null);
+        setSourceHighlight(0);
         audioQueue.reset();
         setView("running");
         break;
@@ -167,7 +268,12 @@ export function App() {
         setView("running");
         break;
       }
-      case "step_finished": fxDoneStep(); dispatch({ type: "finished", tool: String(ev.tool), result: (ev.result as Record<string, unknown>) || {} }); break;
+      case "step_finished":
+        fxDoneStep();
+        dispatch({ type: "finished", tool: String(ev.tool), result: (ev.result as Record<string, unknown>) || {} });
+        // Light up one more source card per completed step.
+        setSourceHighlight((n) => n + 1);
+        break;
       case "step_error":    fxBuzz();     dispatch({ type: "error", tool: String(ev.tool), error: String(ev.error || "") }); break;
       case "narrate":
         setNarration(String(ev.text || ""));
@@ -186,6 +292,7 @@ export function App() {
         break;
       case "mission_routed":
         setVoiceCard((vc) => ({ ...(vc || { label: "Transcript", line: "" }), route: `→ ${ev.display}` }));
+        if (typeof ev.mission === "string") setCurrentMission(ev.mission);
         break;
       case "browser_started": {
         fxZoom();
@@ -229,6 +336,99 @@ export function App() {
         dispatch({ type: "draftResolved", status, draft_id: Number(ev.draft_id) });
         break;
       }
+      case "awaiting_donation": {
+        const totalSeconds = Math.max(3, Number(ev.timeout_s) || 22);
+        setDonationPrompt({
+          prompt_line:     String(ev.prompt_line || "Round up to a sustainability cause?"),
+          amount_eur:      Number(ev.amount_eur || 0),
+          total_spent_eur: Number(ev.total_spent_eur || 0),
+          cause:           String(ev.cause || "Trees for All"),
+          totalSeconds,
+          startedAt:       Date.now(),
+        });
+        setDonationDecision(null);
+        // Wait for the agent's TTS to finish playing before opening the mic
+        // — otherwise the mic captures the agent's own voice as input.
+        // 300 ms extra buffer for trailing room reverb / network jitter.
+        audioQueue.waitForDrain().then(() => {
+          setTimeout(() => {
+            setDonateOpen(true);
+            void donationMic.start();
+          }, 300);
+        });
+        break;
+      }
+      case "donation_decision_received": {
+        setDonationDecision({
+          transcript: String(ev.transcript || ""),
+          decision:   String(ev.decision || "unsure"),
+        });
+        setDonationPrompt(null);
+        setDonateOpen(false);
+        break;
+      }
+      case "donation_decision_timeout": {
+        setDonationDecision({ transcript: "(no answer)", decision: "timeout" });
+        setDonationPrompt(null);
+        setDonateOpen(false);
+        break;
+      }
+      case "tax_scan_started": {
+        setTaxScanState("scanning");
+        setTaxScanMessage("Reading the invoice…");
+        setCurrentMission("tax");
+        setSourceHighlight(0);
+        setView("running");
+        break;
+      }
+      case "tax_extracted": {
+        const ex: TaxExtraction = {
+          iban:        typeof ev.iban === "string" ? ev.iban : null,
+          bic:         typeof ev.bic === "string" ? ev.bic : null,
+          recipient:   typeof ev.recipient === "string" ? ev.recipient : null,
+          amount_eur:  typeof ev.amount_eur === "number" ? ev.amount_eur : null,
+          description: typeof ev.description === "string" ? ev.description : null,
+        };
+        setTaxExtracted(ex);
+        setTaxScanState("scanned");
+        setTaxScanMessage(null);
+        // Close the camera — the next interaction is a voice yes/no.
+        setCameraOpen(false);
+        break;
+      }
+      case "tax_scan_error": {
+        setTaxScanState("error");
+        setTaxScanMessage(String(ev.error || "Scan failed"));
+        break;
+      }
+      case "awaiting_tax_confirm": {
+        setTaxAwaiting({
+          question:   String(ev.question || "Pay this invoice?"),
+          iban:       String(ev.iban || ""),
+          amount_eur: Number(ev.amount_eur || 0),
+          recipient:  String(ev.recipient || "—"),
+        });
+        // Wait for the agent's TTS to finish playing before opening the mic.
+        audioQueue.waitForDrain().then(() => {
+          setTimeout(() => {
+            setTaxConfirmOpen(true);
+            void taxMic.start();
+          }, 300);
+        });
+        break;
+      }
+      case "tax_confirm_received": {
+        setTaxAwaiting(null);
+        setTaxConfirmOpen(false);
+        break;
+      }
+      case "tax_payment_complete":
+      case "tax_payment_skipped":
+      case "tax_payment_error": {
+        setTaxAwaiting(null);
+        setTaxConfirmOpen(false);
+        break;
+      }
       case "mission_complete":
         fxChime();
         setSummary(String(ev.summary || "Mission complete"));
@@ -239,7 +439,7 @@ export function App() {
         setView("complete");
         break;
     }
-  }, []);
+  }, [donationMic, taxMic]);
 
   const status = useEventBus(handleEvent);
 
@@ -256,7 +456,8 @@ export function App() {
     return "upcoming" as const;
   }, [draft]);
 
-  const splitView = view === "running" || (view === "voice" && (browser.visible || cascade.rows.length > 0));
+  const splitView = view === "running" || (view === "voice" && (browser.visible || cascade.rows.length > 0)) || !!taxExtracted || taxScanState === "scanning";
+  const showSources = !!currentMission && !!SOURCES_BY_MISSION[currentMission as keyof typeof SOURCES_BY_MISSION] && splitView;
 
   return (
     <MotionConfig transition={{ duration: 0.32, ease: PUNCTUAL_EASE }}>
@@ -295,7 +496,9 @@ export function App() {
         <main className="min-h-0 overflow-hidden p-4">
           <div className={cn(
             "h-full grid gap-4 transition-[grid-template-columns] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]",
-            splitView ? "grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]" : "grid-cols-1",
+            !splitView && "grid-cols-1",
+            splitView && !showSources && "grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]",
+            splitView && showSources  && "grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,320px)]",
           )}>
 
             {/* Left column: cascade + voice + draft */}
@@ -344,6 +547,92 @@ export function App() {
                       </Card>
                     </motion.div>
                   )}
+
+                  <AnimatePresence>
+                    {(taxExtracted || taxScanState === "scanning") && (
+                      <motion.div key="tax-extracted" layout {...FADE_UP}>
+                        <Card className="p-4 border-l-2 border-l-status-scheduled bg-status-scheduled/5">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <Camera className="w-3.5 h-3.5 text-status-scheduled" />
+                            <span className="label-uc text-status-scheduled">Tax invoice scan</span>
+                            {taxAwaiting && (
+                              <span className="ml-auto label-uc text-muted-foreground animate-pulse">awaiting voice</span>
+                            )}
+                          </div>
+                          {taxScanState === "scanning" && !taxExtracted && (
+                            <div className="text-body text-muted-foreground italic">Reading the invoice…</div>
+                          )}
+                          {taxExtracted && (
+                            <div className="space-y-1 text-body">
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">Recipient</span>
+                                <span className="text-foreground truncate">{taxExtracted.recipient || "—"}</span>
+                              </div>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">Amount</span>
+                                <span className="text-foreground tabular font-medium">
+                                  {taxExtracted.amount_eur != null ? fmtEur(taxExtracted.amount_eur) : "—"}
+                                </span>
+                              </div>
+                              <div className="flex justify-between gap-3">
+                                <span className="text-muted-foreground">IBAN</span>
+                                <span className="text-foreground tabular font-mono text-meta truncate">{taxExtracted.iban || "—"}</span>
+                              </div>
+                              {taxExtracted.bic && (
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-muted-foreground">BIC</span>
+                                  <span className="text-foreground tabular font-mono text-meta">{taxExtracted.bic}</span>
+                                </div>
+                              )}
+                              {taxExtracted.description && (
+                                <div className="flex justify-between gap-3">
+                                  <span className="text-muted-foreground">Reference</span>
+                                  <span className="text-foreground truncate">{taxExtracted.description}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {taxAwaiting && (
+                            <div className="mt-3 pt-3 border-t border-border/70 italic text-foreground">"{taxAwaiting.question}"</div>
+                          )}
+                        </Card>
+                      </motion.div>
+                    )}
+                    {donationPrompt && (
+                      <motion.div key="donation-prompt" layout {...FADE_UP}>
+                        <Card className="p-4 border-l-2 border-l-status-complete bg-status-complete/5">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="relative w-2 h-2">
+                              <span className="absolute inset-0 rounded-full bg-status-complete animate-ping opacity-75" />
+                              <span className="absolute inset-0 rounded-full bg-status-complete" />
+                            </span>
+                            <span className="label-uc text-status-complete">Sustainability · listening</span>
+                            <span className="ml-auto label-uc tabular text-muted-foreground">
+                              €{donationPrompt.amount_eur.toFixed(0)} → {donationPrompt.cause}
+                            </span>
+                          </div>
+                          <div className="text-title text-foreground leading-snug italic">"{donationPrompt.prompt_line}"</div>
+                          <div className="text-meta tabular text-muted-foreground mt-1">
+                            {((donationPrompt.amount_eur / Math.max(donationPrompt.total_spent_eur, 0.01)) * 100).toFixed(1)}% of €{donationPrompt.total_spent_eur.toFixed(0)} spent today
+                          </div>
+                        </Card>
+                      </motion.div>
+                    )}
+                    {donationDecision && !donationPrompt && (
+                      <motion.div key="donation-echo" layout {...FADE_UP}>
+                        <Card className={cn(
+                          "p-3 flex items-center gap-3 border-l-2",
+                          donationDecision.decision === "yes" && "border-l-status-complete",
+                          donationDecision.decision === "no" && "border-l-paper-400",
+                          donationDecision.decision === "timeout" && "border-l-status-overdue",
+                          donationDecision.decision === "unsure" && "border-l-status-upcoming",
+                        )}>
+                          <Badge className="shrink-0 uppercase">{donationDecision.decision}</Badge>
+                          <div className="text-body text-foreground italic truncate">"{donationDecision.transcript}"</div>
+                        </Card>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   <AnimatePresence>
                     {draft && (
@@ -431,6 +720,23 @@ export function App() {
               </AnimatePresence>
             </motion.div>
 
+            {/* Third column — Sources sidebar (mission-aware) */}
+            <AnimatePresence mode="wait">
+              {showSources && (
+                <motion.div
+                  key={`sources-${currentMission}`}
+                  layout
+                  initial={{ opacity: 0, x: 16 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 16 }}
+                  transition={{ duration: 0.34, ease: PUNCTUAL_EASE }}
+                  className="min-h-0 hidden lg:block"
+                >
+                  <SourceSidebar mission={currentMission} highlightCount={sourceHighlight} />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
           </div>
         </main>
 
@@ -443,7 +749,7 @@ export function App() {
             )} />
             <span className="label-uc text-muted-foreground">Voice</span>
             <AnimatePresence mode="wait">
-              {narration ? (
+              {narration && (
                 <motion.span
                   key={narration}
                   initial={{ opacity: 0, y: 6 }}
@@ -454,8 +760,6 @@ export function App() {
                 >
                   {narration}
                 </motion.span>
-              ) : (
-                <span className="text-body text-muted-foreground italic flex-1">— quiet —</span>
               )}
             </AnimatePresence>
           </div>
@@ -470,7 +774,7 @@ export function App() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.8 }}
               transition={{ duration: 0.3, ease: PUNCTUAL_EASE }}
-              className="fixed bottom-16 right-6 z-30"
+              className="fixed bottom-16 right-6 z-30 flex flex-col gap-3"
             >
               <Button
                 onClick={onMicClick}
@@ -481,9 +785,35 @@ export function App() {
               >
                 <Mic className="w-4 h-4" />
               </Button>
+              <Button
+                onClick={onCameraOpen}
+                disabled={!health?.user_id}
+                size="icon"
+                variant="outline"
+                aria-label="Scan a tax invoice"
+                className="w-12 h-12 rounded-full shadow-[0_8px_24px_rgba(74,90,122,0.25)]"
+              >
+                <Camera className="w-4 h-4" />
+              </Button>
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Always-available camera button on the idle screen too */}
+        {view === "idle" && (
+          <div className="fixed bottom-16 right-6 z-30 flex flex-col gap-3">
+            <Button
+              onClick={onCameraOpen}
+              disabled={!health?.user_id}
+              size="icon"
+              variant="outline"
+              aria-label="Scan a tax invoice"
+              className="w-12 h-12 rounded-full shadow-[0_8px_24px_rgba(74,90,122,0.25)]"
+            >
+              <Camera className="w-4 h-4" />
+            </Button>
+          </div>
+        )}
 
         <MicDialog
           open={micOpen}
@@ -492,6 +822,32 @@ export function App() {
           analyser={mic.analyser.current}
           onStop={mic.stop}
           onCancel={onMicCancel}
+        />
+
+        <MicDialog
+          open={donateOpen}
+          state={donationMic.state}
+          seconds={donationMic.seconds}
+          analyser={donationMic.analyser.current}
+          onStop={donationMic.stop}
+          onCancel={onDonateCancel}
+        />
+
+        <MicDialog
+          open={taxConfirmOpen}
+          state={taxMic.state}
+          seconds={taxMic.seconds}
+          analyser={taxMic.analyser.current}
+          onStop={taxMic.stop}
+          onCancel={onTaxConfirmCancel}
+        />
+
+        <CameraDialog
+          open={cameraOpen}
+          onCapture={onCameraCapture}
+          onCancel={onCameraCancel}
+          status={taxScanState}
+          message={taxScanMessage}
         />
       </div>
     </MotionConfig>
@@ -502,26 +858,48 @@ export function App() {
 function IdleMic({ onStart, disabled }: { onStart: () => void; disabled?: boolean }) {
   return (
     <div className="relative flex flex-col items-center">
-      <div className="pointer-events-none absolute inset-0 -m-32 rounded-full opacity-[0.10] blur-3xl bg-[radial-gradient(closest-side,var(--color-punctual),transparent)]" />
+      {/* Layered colour aurora — coral, violet, sky in a soft tri-radial wash */}
+      <div
+        className="pointer-events-none absolute inset-0 -m-40 rounded-full opacity-60 blur-3xl"
+        style={{
+          background:
+            "radial-gradient(circle at 30% 30%, rgba(255,111,143,0.35) 0%, transparent 55%)," +
+            "radial-gradient(circle at 70% 35%, rgba(183,136,255,0.30) 0%, transparent 55%)," +
+            "radial-gradient(circle at 50% 80%, rgba(105,179,255,0.30) 0%, transparent 55%)",
+        }}
+      />
+      {/* Slow-rotating gradient ring underneath the button */}
+      <div
+        className="pointer-events-none absolute -inset-6 rounded-full opacity-90"
+        style={{
+          background:
+            "conic-gradient(from 0deg, var(--color-accent-coral), var(--color-accent-violet), var(--color-accent-sky), var(--color-accent-mint), var(--color-accent-coral))",
+          mask: "radial-gradient(circle, transparent 56%, black 60%, black 70%, transparent 73%)",
+          WebkitMask: "radial-gradient(circle, transparent 56%, black 60%, black 70%, transparent 73%)",
+          animation: "gradientSpin 12s linear infinite",
+          filter: "blur(0.5px)",
+        }}
+      />
 
       <motion.div
         animate={{ scale: [1, 1.04, 1] }}
         transition={{ duration: 3.4, ease: "easeInOut", repeat: Infinity }}
         className="relative"
       >
-        <span className="absolute inset-0 -m-3 rounded-full border border-punctual/15 animate-ping [animation-duration:3s]" />
-        <span className="absolute inset-0 -m-2 rounded-full border border-punctual/25 animate-ping [animation-duration:4s] [animation-delay:1.5s]" />
+        <span className="absolute inset-0 -m-3 rounded-full border border-accent-coral/30 animate-ping [animation-duration:3s]" />
+        <span className="absolute inset-0 -m-2 rounded-full border border-accent-violet/40 animate-ping [animation-duration:4s] [animation-delay:1.5s]" />
         <Button
+          variant="glow"
           size="xl"
           onClick={onStart}
           disabled={disabled}
-          className="relative w-24 h-24 shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_18px_36px_rgba(74,90,122,0.35)] hover:scale-[1.04] active:scale-[0.97] transition-transform duration-default ease-[cubic-bezier(0.2,0,0,1)]"
+          className="relative w-28 h-28 shadow-[0_0_0_1px_rgba(255,255,255,0.10),0_24px_48px_-12px_rgba(255,111,143,0.5)]"
         >
-          <Mic className="w-9 h-9" />
+          <Mic className="w-10 h-10" />
         </Button>
       </motion.div>
 
-      <h1 className="text-title-lg text-foreground mt-9 mb-1.5">Tap to talk</h1>
+      <h1 className="text-title-lg mt-9 mb-1.5 gradient-text font-semibold">Tap to talk</h1>
       <p className="text-body text-muted-foreground mb-7">Speak the mission like you'd say it to a friend.</p>
 
       <div className="flex flex-col items-center gap-1">
@@ -535,7 +913,8 @@ function IdleMic({ onStart, disabled }: { onStart: () => void; disabled?: boolea
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.15 + i * 0.08, duration: 0.32, ease: PUNCTUAL_EASE }}
-            className="text-meta text-paper-400 italic"
+            whileHover={{ y: -2, color: "rgb(255 111 143)" }}
+            className="text-meta text-paper-400 italic cursor-default transition-colors"
           >
             “{s}”
           </motion.span>

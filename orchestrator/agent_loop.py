@@ -285,6 +285,23 @@ def run_mission(
                 })
                 continue
 
+            if name == "confirm_donation":
+                # Blocks the worker thread up to timeout_s waiting for the user
+                # to record a yes/no via /missions/donate/confirm.
+                result = toolbox.await_donation_decision(
+                    amount_eur=float(args.get("amount_eur", 0.0)),
+                    total_spent_eur=float(args.get("total_spent_eur", 0.0)),
+                    cause=str(args.get("cause", "Trees for All")),
+                    prompt_line=str(args.get("prompt_line", "")),
+                    timeout_s=float(args.get("timeout_s", 22.0)),
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps(result, default=str),
+                })
+                continue
+
             result = _dispatch_bunq(toolbox, name, args)
             if name == "create_draft_payment" and "draft_id" in result:
                 last_draft_id = result["draft_id"]
@@ -315,17 +332,12 @@ def run_mission(
         except Exception as e:  # noqa: BLE001
             bus.publish("balance_snapshot_error", {"step": "draft_resolved", "error": str(e)})
 
-        # Closing narrative — generated fresh by Claude each run for natural variation.
-        closing = _generate_closing_line(client, model, status, narrations, final_summary)
-
-        bus.publish("narrate", {"text": closing})
-        narrations.append(closing)
-        try:
-            audio_filename = synthesize_narration(closing)
-            bus.publish("narrate_audio", {"text": closing, "url": f"/tts/{audio_filename}"})
-        except Exception as e:  # noqa: BLE001
-            bus.publish("narrate_audio_error", {"text": closing, "error": str(e)})
-        bus.publish("mission_finalized", {"status": status, "summary": closing})
+        # NB: previously we generated and narrated an additional closing line
+        # here. With the new donation step the agent already says a closing
+        # narration before finish_mission — adding another one made the
+        # demo feel like the agent was "responding twice". Just emit the
+        # `mission_finalized` event so the dashboard knows the draft is done.
+        bus.publish("mission_finalized", {"status": status, "summary": final_summary or ""})
 
     return {
         "final_summary": final_summary,

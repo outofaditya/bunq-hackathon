@@ -219,6 +219,35 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "confirm_donation",
+        "description": (
+            "Ask the user out loud whether to round up the day's spend with a small donation to "
+            "a sustainability cause. Use this ONCE per mission, AFTER the main cascade is done "
+            "and BEFORE finish_mission. Opens the user's mic and BLOCKS until they answer.\n\n"
+            "Compute `total_spent_eur` as the sum of every pay_vendor amount that ACTUALLY moved "
+            "during this mission (do NOT include create_draft_payment amounts that haven't been "
+            "approved yet). Pick a tasteful round `amount_eur` between 3% and 5% of total, "
+            "rounded to the nearest €1 or €0.50 — e.g. €5 if total was €120, €15 if total was €380. "
+            "Choose `cause` to fit the mission: 'Trees for All' for travel/leisure, 'Just Diggit' "
+            "for outdoorsy, 'Plastic Soup Foundation' for everyday. Phrase the user-facing line "
+            "yourself in `prompt_line` — short, ≤16 words, conversational.\n\n"
+            "Returns decision ∈ 'yes' | 'no' | 'unsure' | 'timeout'.\n"
+            "  YES                    → follow up with pay_vendor for `amount_eur` to `cause`.\n"
+            "  NO / UNSURE / TIMEOUT  → skip the donation. Narrate one neutral line and finish."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "amount_eur":       {"type": "number", "description": "Rounded donation, 3-5% of total_spent_eur."},
+                "total_spent_eur":  {"type": "number", "description": "Sum of pay_vendor amounts that moved during this mission."},
+                "cause":            {"type": "string", "description": "Sustainability charity, e.g. 'Trees for All'."},
+                "prompt_line":      {"type": "string", "description": "≤16-word line voiced to the user, in your tone."},
+                "timeout_s":        {"type": "number", "minimum": 3, "maximum": 45},
+            },
+            "required": ["amount_eur", "total_spent_eur", "cause", "prompt_line"],
+        },
+    },
+    {
         "name": "narrate",
         "description": (
             "Speak a one-line summary to the user via TTS. Use AT MOST once per step so the demo "

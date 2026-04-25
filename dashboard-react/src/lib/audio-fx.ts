@@ -57,13 +57,39 @@ export function fxChime(): void {
 class AudioQueue {
   private q: string[] = [];
   private current: HTMLAudioElement | null = null;
+  /** Promise resolvers waiting for the queue to fully drain. */
+  private drainResolvers: Array<() => void> = [];
+
   enqueue(url: string) { this.q.push(url); this.playNext(); }
+
   reset() {
     this.q = [];
     if (this.current) { try { this.current.pause(); } catch {} this.current = null; }
+    // Anything waiting on a drain — drain happened (because we just nuked it).
+    this.drainResolvers.splice(0).forEach((r) => r());
   }
+
+  /** True iff nothing is currently playing AND the queue is empty. */
+  isDrained(): boolean {
+    return this.current == null && this.q.length === 0;
+  }
+
+  /** Resolves the moment the queue has finished playing everything in it.
+   *  Used by the confirmation mics so the user's mic doesn't open while the
+   *  agent's own TTS is still audible (which used to cause echo + the
+   *  agent's voice ending up in the user's transcript). */
+  waitForDrain(): Promise<void> {
+    if (this.isDrained()) return Promise.resolve();
+    return new Promise((resolve) => this.drainResolvers.push(resolve));
+  }
+
   private playNext() {
-    if (this.current || this.q.length === 0) return;
+    if (this.current) return;
+    if (this.q.length === 0) {
+      // Just drained — fire any waiters once.
+      this.drainResolvers.splice(0).forEach((r) => r());
+      return;
+    }
     const url = this.q.shift()!;
     this.current = new Audio(url);
     this.current.onended = this.current.onerror = () => {

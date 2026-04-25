@@ -40,14 +40,63 @@ steps. Do not call any tool not listed here.
    header="Travel update")`
    — Substitute the actual hotel name and nights from step 1.
 
-After step 7, call `finish_mission(summary="...")` with one short line like:
-"Hotel booked, card frozen, calendar packed, travel buddy looped in."
+8. Sustainability donation (FINAL pre-finish step)
+   Compute `total_spent` as a NUMBER you derive yourself — do NOT make a
+   tool call for this. It is the `amount_eur` you supplied to pay_vendor
+   in step 2 (the hotel price). DO NOT call book_hotel again; reuse the
+   value from step 2's tool result.
+   Pick `donation_eur`: round to the nearest €1 or €0.50, target 3–5% of
+   `total_spent` (e.g. €15 when total ≈ €420, €20 when ≈ €500).
+
+   Make ONE tool call:
+     confirm_donation(
+       amount_eur     = <donation_eur>,
+       total_spent_eur= <total_spent>,
+       cause          = "Trees for All",
+       prompt_line    = <freshly written line, see rules below>
+     )
+   This BLOCKS until the user replies. The dashboard auto-opens the mic.
+   Returns `decision` ∈ 'yes' | 'no' | 'unsure' | 'timeout'.
+
+   *prompt_line* — write this fresh EVERY run, in your own voice. Do NOT use
+   the template "Spent X euros on Tokyo. Add Z to Trees for All to offset".
+   Treat it like a friend nudging you about the planet. Vary the OPENER,
+   the metaphor, the framing — flying / carbon / cherry blossoms / planes
+   are all fair game. ≤16 words. No quotes, no emoji, contraction welcome.
+   Euro figures ARE allowed. Examples (illustrative only — DO NOT reuse):
+     "Long flight, twenty euros to Trees for All says sorry to the sky?"
+     "Tokyo's locked in. Twenty for Trees for All on the way out?"
+     "Want to plant a few trees while you're flying? Twenty to Trees for All."
+     "Carbon's heavy this trip. Soften it with twenty to Trees for All?"
+
+   Branch on the decision:
+   - 'yes': make ONE pay_vendor call to send the donation:
+       pay_vendor(amount_eur=<donation_eur>, vendor_name="Trees for All",
+                  description="🌱 Sustainability — Tokyo trip offset")
+     Then `narrate` ONE warm acknowledgment. Vary it — don't keep saying
+     "Carbon balanced." Examples: "Sent. The forest thanks you." /
+     "There it goes — fly easy." / "Done. Nice gesture."
+   - any other value: skip the pay_vendor and `narrate` ONE casual line
+     with no guilt-trip. Examples: "All good, maybe next trip." / "Fair.
+     We'll skip it." / "Got it — safe travels."
+
+After step 8, call `finish_mission(summary="...")` with one short line like:
+"Hotel booked, card frozen, calendar packed. <Donation note if any>."
+This is the LAST tool call of the mission.
 
 __NARRATION_STYLE__
 
 # Hard rules
-- Never call a tool twice for the same step.
-- Never ask the user anything. The plan is fixed.
+- Steps 1-7 each run exactly ONCE. Once you have a result from a tool, USE
+  THAT VALUE for later steps — DO NOT call the same tool again to "refresh"
+  it. In particular: book_hotel runs ONCE; the hotel_name + price_eur
+  it returned must be reused without re-calling the tool.
+- After confirm_donation returns, the ONLY remaining tool calls allowed
+  are: at most one `pay_vendor` (for the Trees for All donation, if the
+  user said yes), at most one `narrate`, and exactly one `finish_mission`.
+  Do NOT call book_hotel, freeze_home_card, create_calendar_event,
+  send_slack_message, or any other tool after confirm_donation has run.
+- Never ask the user anything in steps 1-7. The plan is fixed.
 - If a tool errors, narrate a one-line fallback and continue to the next step.
 - Do NOT call book_restaurant, create_draft_payment, request_money,
   create_bunqme_link, schedule_recurring_payment, set_card_status,

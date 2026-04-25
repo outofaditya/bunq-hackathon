@@ -347,6 +347,122 @@ class BunqToolbox:
     # 10. register_webhook (Phase 2+, not exposed to Claude)
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Pay via IBAN (used by the Tax-invoice receipt scanner)
+    # ------------------------------------------------------------------
+
+    def pay_via_iban(
+        self,
+        amount_eur: float,
+        iban: str,
+        recipient_name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        """Send a real bunq payment to an external IBAN counterparty.
+
+        Mirrors `pay_vendor` but uses counterparty_alias type=IBAN. Used by
+        the tax-invoice scanner where we extract an IBAN from a photographed
+        receipt rather than knowing a vendor email up front.
+        """
+        aid = self.primary_id
+        clean_iban = (iban or "").replace(" ", "").upper().strip()
+        bus.publish("step_started", {
+            "tool":            "pay_via_iban",
+            "iban":            clean_iban,
+            "recipient_name":  recipient_name,
+            "amount_eur":      amount_eur,
+            "description":     description,
+            "from_account_id": aid,
+        })
+        resp = self.client.post(
+            f"user/{self.uid}/monetary-account/{aid}/payment",
+            {
+                "amount":             {"value": f"{amount_eur:.2f}", "currency": "EUR"},
+                "counterparty_alias": {"type": "IBAN", "value": clean_iban, "name": recipient_name},
+                "description":        description,
+            },
+        )
+        payment_id = resp[0]["Id"]["id"]
+        result = {
+            "payment_id":     payment_id,
+            "iban":           clean_iban,
+            "recipient_name": recipient_name,
+            "amount_eur":     amount_eur,
+        }
+        bus.publish("step_finished", {"tool": "pay_via_iban", "result": result})
+        return result
+
+    # ------------------------------------------------------------------
+    # Sustainability donation prompt (post-mission)
+    # ------------------------------------------------------------------
+
+    def await_donation_decision(
+        self,
+        amount_eur: float,
+        total_spent_eur: float,
+        cause: str,
+        prompt_line: str,
+        timeout_s: float = 22.0,
+    ) -> dict[str, Any]:
+        """The agent SPEAKS the donation question first, then we open the mic.
+
+        Flow:
+          1. Synthesize TTS for `prompt_line` and emit narrate_audio so the
+             dashboard plays it.
+          2. Sleep long enough for the audio to finish (estimated from word
+             count) — keeps the user's mic from picking up our own voice.
+          3. Emit awaiting_donation; the dashboard auto-opens the mic dialog.
+          4. Block on the bridge event until /missions/donate/confirm fires.
+        """
+        from . import server as _srv  # noqa: PLC0415  — avoid circular import at module load
+        from .tts import synthesize_narration  # noqa: PLC0415
+
+        timeout_s = max(3.0, min(60.0, float(timeout_s)))
+        prompt_line = (prompt_line or "").strip()[:240] or f"Donate €{amount_eur:.2f} to {cause}?"
+        bus.publish("step_started", {"tool": "confirm_donation", "amount_eur": amount_eur, "cause": cause})
+
+        # 1. Speak the question out loud first.
+        bus.publish("narrate", {"text": prompt_line})
+        try:
+            fname = synthesize_narration(prompt_line)
+            bus.publish("narrate_audio", {"text": prompt_line, "url": f"/tts/{fname}"})
+        except Exception as e:  # noqa: BLE001
+            bus.publish("narrate_audio_error", {"text": prompt_line, "error": str(e)})
+
+        # 2. Wait for playback. ~2.3 wps natural pace + 1.2 s buffer.
+        word_count = max(1, len(prompt_line.split()))
+        playback_s = max(3.0, word_count / 2.3 + 1.2)
+        time.sleep(playback_s)
+
+        # 3. NOW open the mic.
+        bus.publish("awaiting_donation", {
+            "prompt_line":     prompt_line,
+            "amount_eur":      float(amount_eur),
+            "total_spent_eur": float(total_spent_eur),
+            "cause":           cause,
+            "timeout_s":       timeout_s,
+        })
+
+        _srv._donation_event.clear()
+        _srv._donation_slot = None
+
+        got = _srv._donation_event.wait(timeout=timeout_s)
+        slot = _srv._donation_slot
+        if got and slot:
+            result = {
+                "ok":         True,
+                "decision":   slot.get("decision", "unsure"),
+                "transcript": slot.get("transcript", ""),
+                "confidence": slot.get("confidence", 0.0),
+            }
+        else:
+            result = {"ok": True, "decision": "timeout", "transcript": "", "confidence": 0.0}
+            bus.publish("donation_decision_timeout", {"prompt_line": prompt_line})
+
+        bus.publish("step_finished", {"tool": "confirm_donation", "result": result})
+        bus.publish("donation_decision", {"decision": result["decision"], "transcript": result["transcript"]})
+        return result
+
     def register_webhook(self, public_url: str) -> None:
         callback = f"{public_url.rstrip('/')}/bunq-webhook"
         self.client.post(

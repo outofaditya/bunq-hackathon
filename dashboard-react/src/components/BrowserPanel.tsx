@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Globe } from "lucide-react";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
@@ -16,9 +16,42 @@ export interface BrowserPanelState {
 }
 
 export function BrowserPanel({ state }: { state: BrowserPanelState }) {
-  const [shotKey, setShotKey] = useState(0);
-  useEffect(() => { setShotKey((k) => k + 1); }, [state.shotData]);
+  // Double-buffer the screenshot: render two <img> elements, fade between
+  // them as new frames arrive. Avoids the flicker that comes from re-mounting
+  // a single <motion.img> via a `key` change (briefly shows nothing while
+  // remounting). With double-buffer we always have a fully-loaded image
+  // visible; the new one only takes over once it's decoded.
+  const [frontSrc, setFrontSrc] = useState<string | null>(null);
+  const [backSrc,  setBackSrc]  = useState<string | null>(null);
+  const [showBack, setShowBack] = useState(false);
+  const lastDataRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!state.shotData) return;
+    if (state.shotData === lastDataRef.current) return;
+    lastDataRef.current = state.shotData;
+    const url = `data:image/png;base64,${state.shotData}`;
+
+    // First frame: just set the front image, no fade dance.
+    if (!frontSrc) {
+      setFrontSrc(url);
+      return;
+    }
+    // Subsequent frames: write to the hidden buffer, then flip.
+    if (showBack) {
+      setFrontSrc(url);
+      // give the new front a tick to decode before swapping
+      requestAnimationFrame(() => setShowBack(false));
+    } else {
+      setBackSrc(url);
+      requestAnimationFrame(() => setShowBack(true));
+    }
+    // shotData is the trigger; the others are stable refs across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.shotData]);
+
   if (!state.visible) return null;
+
   return (
     <motion.div
       layout
@@ -42,21 +75,33 @@ export function BrowserPanel({ state }: { state: BrowserPanelState }) {
         <div
           className={cn(
             "flex-1 min-h-0 m-3 mt-2 rounded-md overflow-hidden bg-paper-950 border border-border/70",
-            "grid place-items-center",
+            "relative",
           )}
         >
-          {state.shotData ? (
-            <motion.img
-              key={shotKey}
-              initial={{ opacity: 0.65 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-              src={`data:image/png;base64,${state.shotData}`}
-              className="w-full h-full object-contain"
+          {/* Both images live here; whichever is "active" gets full opacity.
+              CSS transition makes the cross-fade smooth and remount-free. */}
+          {frontSrc && (
+            <img
+              src={frontSrc}
               alt=""
+              decoding="async"
+              className="absolute inset-0 w-full h-full object-contain transition-opacity duration-[180ms] ease-out"
+              style={{ opacity: showBack ? 0 : 1 }}
             />
-          ) : (
-            <div className="text-muted-foreground text-meta">Loading…</div>
+          )}
+          {backSrc && (
+            <img
+              src={backSrc}
+              alt=""
+              decoding="async"
+              className="absolute inset-0 w-full h-full object-contain transition-opacity duration-[180ms] ease-out"
+              style={{ opacity: showBack ? 1 : 0 }}
+            />
+          )}
+          {!frontSrc && !backSrc && (
+            <div className="absolute inset-0 grid place-items-center text-muted-foreground text-meta">
+              Loading…
+            </div>
           )}
         </div>
       </Card>
