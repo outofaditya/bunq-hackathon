@@ -13,6 +13,12 @@ from typing import Any
 
 
 _PLANS_BY_CATEGORY: dict[str, list[dict[str, Any]]] = {
+    "duwo": [
+        {"id": "duwo-studio",  "provider": "DUWO", "plan": "Studio · Roeterseiland",     "monthly": 720, "features": "Furnished · 28 m² · all-in (water, gas, electric)"},
+        {"id": "duwo-single",  "provider": "DUWO", "plan": "Single Room · Diemen",       "monthly": 540, "features": "Shared kitchen · 18 m² · all-in"},
+        {"id": "duwo-shared",  "provider": "DUWO", "plan": "Shared Room · Uilenstede",   "monthly": 380, "features": "Bunk · 12 m² · all-in"},
+        {"id": "duwo-studio2", "provider": "DUWO", "plan": "Studio · Amstelveen",        "monthly": 660, "features": "Furnished · 24 m² · balcony"},
+    ],
     "streaming": [
         {"id": "spotify-prem",  "provider": "Spotify",   "plan": "Premium Individual",     "monthly": 11.99, "features": "Ad-free music · offline · podcasts"},
         {"id": "netflix-std",   "provider": "Netflix",   "plan": "Standard with ads",      "monthly": 5.99,  "features": "Most movies & series · 1080p · 2 devices"},

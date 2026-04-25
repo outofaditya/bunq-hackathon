@@ -286,27 +286,12 @@ def _restaurant_html() -> str:
 
 
 def _inject_restaurant_data(query: str = "popular dinner restaurants Amsterdam") -> str:
-    """Render the booking page with live Google Places data injected.
-
-    Replaces the in-page `RESTAURANTS = [...]` literal with a fresh array.
-    """
+    """Render the booking page with live Google Places data injected."""
     import json as _json
 
     html = _restaurant_html()
     restaurants = search_restaurants(query=query, max_results=4)
-
-    # Build the JS array literal that replaces the hardcoded one in the page.
-    js_array = _json.dumps(restaurants, ensure_ascii=False)
-    # The original line in index.html starts with "const RESTAURANTS = ["
-    # and is multiline. Replace from `const RESTAURANTS = [` through the
-    # closing `];` on a line by itself.
-    import re as _re
-
-    pattern = _re.compile(r"const RESTAURANTS = \[[\s\S]*?\];", _re.MULTILINE)
-    replacement = f"const RESTAURANTS = {js_array};"
-    if not pattern.search(html):
-        return html  # nothing matched — fall back to the static page
-    return pattern.sub(replacement, html, count=1)
+    return html.replace("__RESTAURANTS__", _json.dumps(restaurants, ensure_ascii=False))
 
 
 @app.get("/mock-restaurant/")

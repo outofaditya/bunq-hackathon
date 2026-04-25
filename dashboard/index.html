@@ -229,8 +229,38 @@
     display: none;
     flex-direction: column;
     gap: 14px;
+    transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.3, 1),
+                box-shadow 0.45s ease,
+                border-radius 0.45s ease;
+    transform-origin: top center;
   }
   .browser-panel.show { display: flex; }
+  .browser-panel.zoomed {
+    position: fixed;
+    inset: 4vh 5vw;
+    z-index: 1000;
+    transform: scale(1);
+    box-shadow: 0 60px 120px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--cyan);
+    background: var(--card);
+    border-radius: 28px;
+    padding: 22px;
+  }
+  .browser-panel.zoomed .bp-frame {
+    aspect-ratio: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  .zoom-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 11, 18, 0.78);
+    backdrop-filter: blur(6px);
+    z-index: 999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+  }
+  .zoom-backdrop.show { opacity: 1; pointer-events: auto; }
   .bp-head { display: flex; align-items: center; gap: 14px; }
   .bp-icon {
     width: 48px; height: 48px;
@@ -601,12 +631,50 @@
   </main>
 </div>
 
+<div class="zoom-backdrop" id="zoom-backdrop"></div>
+
 <div class="narration-bar" id="narration-bar">
   <div class="narr" id="narration"></div>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
+
+// ---- subtle Web Audio FX -----------------------------------------------
+let _audioCtx = null;
+function audioCtx() {
+  if (!_audioCtx) {
+    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch { _audioCtx = null; }
+  }
+  if (_audioCtx && _audioCtx.state === "suspended") _audioCtx.resume();
+  return _audioCtx;
+}
+function tone({freq=880, dur=0.10, type="sine", vol=0.06, attack=0.005, release=0.05, when=0}={}) {
+  const ctx = audioCtx();
+  if (!ctx) return;
+  const t0 = ctx.currentTime + when;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.exponentialRampToValueAtTime(vol, t0 + attack);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + release);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + release + 0.05);
+}
+function fx_tick()      { tone({freq:1180, dur:0.05, vol:0.045, type:"sine"}); }
+function fx_done_step() { tone({freq:740,  dur:0.07, vol:0.04,  type:"sine"}); }
+function fx_chime() {
+  // Major chord — A5, C#6, E6
+  tone({freq:880,  dur:0.55, vol:0.05, type:"sine"});
+  tone({freq:1109, dur:0.55, vol:0.045, type:"sine", when:0.04});
+  tone({freq:1318, dur:0.65, vol:0.04, type:"sine", when:0.09});
+}
+function fx_buzz() { tone({freq:280, dur:0.16, vol:0.07, type:"square"}); }
+function fx_zoom() { tone({freq:520, dur:0.10, vol:0.05, type:"triangle"}); }
 
 const ICONS = {
   pay_vendor_default: "🧾",
@@ -799,7 +867,8 @@ function resetUI() {
   $("summary-text").textContent = "";
   $("narration-bar").classList.remove("show");
   $("voice-card").classList.remove("show");
-  $("browser-panel").classList.remove("show");
+  $("browser-panel").classList.remove("show", "zoomed");
+  $("zoom-backdrop").classList.remove("show");
   $("bp-shot").src = "";
   $("bp-line").textContent = "";
   $("bp-step").textContent = "";
@@ -835,14 +904,21 @@ function handle(ev) {
   switch (ev.type) {
     case "mission_started":           resetUI(); break;
     case "balance_snapshot":          flashBalance(ev.primary_balance_eur, ev.step); break;
-    case "step_started":              renderStarted(ev); break;
-    case "step_finished":             renderFinished(ev); break;
-    case "step_error":                renderError(ev); break;
+    case "step_started":              fx_tick();      renderStarted(ev); break;
+    case "step_finished":             fx_done_step(); renderFinished(ev); break;
+    case "step_error":                fx_buzz();      renderError(ev); break;
     case "narrate":                   showNarration(ev.text); break;
     case "narrate_audio":             enqueueAudio(ev.url); break;
     case "browser_started": {
-      $("browser-panel").classList.add("show");
-      $("bp-line").textContent = `Booking ${ev.restaurant_hint || "a restaurant"} for ${ev.when || ""} (≤ €${ev.max_budget})`;
+      fx_zoom();
+      $("browser-panel").classList.add("show", "zoomed");
+      $("zoom-backdrop").classList.add("show");
+      const task = ev.task || "browser";
+      let line = "Browsing live page…";
+      if (task === "book_restaurant") line = `Booking ${ev.restaurant_hint || "a restaurant"} for ${ev.when || ""} (≤ €${ev.max_budget})`;
+      else if (task === "book_hotel")  line = `Booking ${ev.city || "a hotel"} · ${ev.nights || "?"} night(s) · ≤ €${ev.max_budget}`;
+      else if (task === "subscribe_to_service") line = `Choosing a ${ev.category || ""} plan · ≤ €${ev.max_monthly_eur}/mo`;
+      $("bp-line").textContent = line;
       $("bp-step").textContent = "step 0";
       break;
     }
@@ -865,8 +941,17 @@ function handle(ev) {
       break;
     }
     case "browser_complete": {
-      $("bp-line").textContent = `✓ Booked ${ev.restaurant_name} · ${ev.time_slot || ""} · €${ev.price_eur}  (ref ${ev.reference || ""})`;
+      let line = "✓ Booked";
+      if (ev.restaurant_name)  line = `✓ Booked ${ev.restaurant_name} · ${ev.time_slot || ""} · €${ev.price_eur}  (ref ${ev.reference || ""})`;
+      else if (ev.hotel_name)  line = `✓ Booked ${ev.hotel_name} · ${ev.nights || "?"}n · €${ev.price_eur}  (ref ${ev.reference || ""})`;
+      else if (ev.service_name) line = `✓ Confirmed ${ev.service_name}${ev.plan ? " · "+ev.plan : ""} · €${ev.monthly_eur}/mo  (ref ${ev.reference || ""})`;
+      $("bp-line").textContent = line;
       $("bp-step").textContent = "complete";
+      // hold briefly on the result, then zoom back out
+      setTimeout(() => {
+        $("browser-panel").classList.remove("zoomed");
+        $("zoom-backdrop").classList.remove("show");
+      }, 1800);
       break;
     }
     case "voice_capture_started": {
@@ -931,6 +1016,7 @@ function handle(ev) {
       break;
     }
     case "mission_complete":
+      fx_chime();
       $("summary").classList.add("show");
       $("summary-text").textContent = ev.summary || "Mission complete";
       break;
@@ -974,9 +1060,9 @@ function connectSSE() {
 }
 
 const MISSIONS = [
-  { name: "weekend", emoji: "🌹", title: "Surprise Weekend",  meta: "€500 · 6 actions · browser book + 1 approval",        seed: 500, hero: "Real browser-agent books a restaurant on a live page; bunq pays the actual returned price; one phone-tap on concert tickets." },
-  { name: "payday",  emoji: "💼", title: "Payday Autopilot",  meta: "€1,275+/mo · 7 actions · browser-picked plan",        seed: 0,   hero: "Browser-agent picks a streaming plan from a comparison site, then bunq schedules rent, gym, and that plan as recurring." },
-  { name: "travel",  emoji: "🇯🇵", title: "Travel Mode",       meta: "hotel + freeze · 7 actions · 3 calendar events",     seed: 600, hero: "Browser-agent books a Tokyo hotel; bunq pays the real price; card freezes; trip lands on your calendar; buddy gets a DM." },
+  { name: "weekend", emoji: "🌹", title: "Surprise Weekend",  meta: "TheFork · 6 actions · 1 approval",     seed: 500, hero: "Browser-agent books on TheFork (live data); bunq pays the actual price; one phone-tap on concert tickets." },
+  { name: "payday",  emoji: "💼", title: "Payday Autopilot",  meta: "DUWO · 6 actions · rent + bills",      seed: 0,   hero: "Browser-agent sets up DUWO rent autopay, then bunq schedules gym and streaming. All on autopay." },
+  { name: "travel",  emoji: "🇯🇵", title: "Travel Mode",       meta: "Booking.com · 7 actions · card freeze", seed: 600, hero: "Browser-agent books a Tokyo hotel on Booking.com; bunq pays; card freezes; trip on your calendar; buddy DM." },
 ];
 
 let currentMission = MISSIONS[0];

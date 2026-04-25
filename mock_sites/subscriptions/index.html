@@ -3,87 +3,123 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>PlanFinder · Compare Plans</title>
+<title>DUWO MyAccount</title>
 <style>
-  :root { --bg: #fdf6ee; --card: #fff; --ink: #1d1f24; --muted: #6e7682; --accent: #ff6a4d; --line: #ecdcc6; }
+  /* DUWO brand: deep teal (#005a72) + soft pink (#ff7a93) accents, white surface, slim radii. */
+  :root {
+    --header: #005a72;
+    --header-2: #00475a;
+    --bg: #f5f7f9;
+    --card: #fff;
+    --ink: #15222a;
+    --muted: #5d6d77;
+    --line: #d8e0e5;
+    --cta: #ff7a93;
+    --cta-d: #f15576;
+    --status-ok: #1d9c64;
+    --tag-bg: #e7f3f6;
+    --tag-ink: #00475a;
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
-  body { font: 16px/1.5 "SF Pro Display", "Inter", system-ui, sans-serif; background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; min-height: 100vh; }
-  header { padding: 24px 40px; background: var(--card); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 14px; }
-  header .logo { font: 700 24px/1 system-ui; letter-spacing: -0.02em; }
-  header .logo span { color: var(--accent); }
-  header .tag { margin-left: auto; font-size: 12px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
-  main { max-width: 1080px; margin: 0 auto; padding: 40px 32px 80px; }
-  h1 { font: 700 36px/1.1 system-ui; letter-spacing: -0.02em; margin: 0 0 8px; }
-  .subtitle { color: var(--muted); font-size: 16px; margin: 0 0 32px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-  .plan { background: var(--card); border-radius: 18px; padding: 22px; border: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; transition: transform 0.15s, box-shadow 0.15s; }
-  .plan:hover { transform: translateY(-2px); box-shadow: 0 18px 40px -20px rgba(255,106,77,0.20); }
-  .plan .provider { color: var(--muted); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
-  .plan .name { font: 600 20px/1.2 system-ui; letter-spacing: -0.01em; }
-  .plan .features { color: var(--muted); font-size: 13px; flex: 1; }
-  .plan .price { color: var(--accent); font-weight: 700; font-size: 22px; margin-top: 8px; }
-  .plan .price small { color: var(--muted); font-weight: 500; font-size: 13px; }
+  body { font: 15px/1.5 "SF Pro Text", "Inter", system-ui, sans-serif; background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; min-height: 100vh; }
+
+  header.tb {
+    background: var(--header); color: #fff;
+    padding: 14px 32px;
+    display: flex; align-items: center; gap: 24px;
+  }
+  .logo { font: 800 22px/1 system-ui; letter-spacing: -0.02em; }
+  .logo .accent { color: var(--cta); }
+  .nav { display: flex; gap: 18px; font-size: 13px; opacity: 0.9; }
+  header.tb .right { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--cta); color: #fff; display: grid; place-items: center; font: 700 13px/1 system-ui; }
+
+  main { max-width: 980px; margin: 0 auto; padding: 28px 32px 80px; }
+
+  .greeting { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+  .greeting h1 { font: 700 26px/1.2 system-ui; letter-spacing: -0.01em; margin: 0; }
+  .greeting .room-pill { background: var(--tag-bg); color: var(--tag-ink); font: 700 12px/1 system-ui; padding: 6px 10px; border-radius: 999px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .subtitle { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .plan {
+    background: var(--card); border-radius: 10px; padding: 20px;
+    border: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: 6px;
+    transition: box-shadow 0.15s, transform 0.05s;
+  }
+  .plan:hover { box-shadow: 0 8px 24px -10px rgba(0,90,114,0.18); }
+  .plan .provider { color: var(--header); font: 700 11px/1 system-ui; letter-spacing: 0.1em; text-transform: uppercase; }
+  .plan .name { font: 700 18px/1.2 system-ui; letter-spacing: -0.01em; }
+  .plan .features { color: var(--muted); font-size: 13px; flex: 1; line-height: 1.45; }
+  .plan .price { color: var(--ink); font-weight: 700; font-size: 22px; margin-top: 10px; }
+  .plan .price small { color: var(--muted); font-weight: 500; font-size: 12px; }
   .plan button { margin-top: 12px; }
 
-  .btn { background: var(--accent); color: #fff; border: 0; border-radius: 999px; padding: 12px 22px; font: 600 15px/1 system-ui; cursor: pointer; transition: filter 0.15s, transform 0.05s; }
-  .btn:hover { filter: brightness(1.05); }
+  .btn { background: var(--cta); color: #fff; border: 0; border-radius: 8px; padding: 11px 20px; font: 700 14px/1 system-ui; cursor: pointer; transition: background 0.15s, transform 0.05s; }
+  .btn:hover { background: var(--cta-d); }
   .btn:active { transform: translateY(1px); }
   .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
-  .btn-row { display: flex; gap: 12px; margin-top: 24px; }
+  .btn-row { display: flex; gap: 10px; margin-top: 20px; }
 
-  .confirm-card { background: var(--card); border-radius: 22px; padding: 32px; border: 1px solid var(--line); margin-bottom: 24px; }
-  .summary-row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .confirm-card { background: var(--card); border-radius: 10px; padding: 26px; border: 1px solid var(--line); margin-bottom: 14px; }
+  .confirm-card h2 { font: 700 22px/1.2 system-ui; margin: 0 0 12px; color: var(--header); letter-spacing: -0.01em; }
+  .summary-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--line); }
   .summary-row:last-child { border-bottom: 0; }
   .summary-row .k { color: var(--muted); }
   .summary-row .v { font-weight: 600; }
-  .total-row { padding-top: 18px; }
-  .total-row .v { font-size: 24px; color: var(--accent); font-weight: 700; }
+  .total-row .v { font-size: 22px; color: var(--cta-d); font-weight: 700; }
 
-  .done-card { background: var(--card); border-radius: 22px; padding: 48px; border: 1px solid var(--line); text-align: center; }
-  .done-card .check { width: 72px; height: 72px; margin: 0 auto 18px; border-radius: 999px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 38px; font-weight: 700; }
-  .done-card h2 { font: 700 28px/1.2 system-ui; margin: 0 0 8px; letter-spacing: -0.01em; }
-  .done-card p { color: var(--muted); margin: 0 0 16px; }
-  .ref-badge { display: inline-block; background: var(--bg); border: 1px solid var(--line); padding: 8px 16px; border-radius: 999px; font: 500 13px/1 ui-monospace, monospace; color: var(--muted); margin-top: 12px; }
+  .done-card { background: var(--card); border-radius: 10px; padding: 40px; border: 1px solid var(--line); text-align: center; }
+  .done-card .check { width: 56px; height: 56px; margin: 0 auto 12px; border-radius: 50%; background: var(--status-ok); color: #fff; display: grid; place-items: center; font-size: 28px; font-weight: 700; }
+  .done-card h2 { font: 700 22px/1.2 system-ui; margin: 0 0 6px; color: var(--header); }
+  .done-card p { color: var(--muted); margin: 0 0 12px; font-size: 14px; }
+  .ref-badge { display: inline-block; background: var(--tag-bg); border: 1px solid var(--line); padding: 6px 12px; border-radius: 999px; font: 600 12px/1 ui-monospace, monospace; color: var(--muted); margin-top: 10px; }
 
   .hidden { display: none; }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="logo">Plan<span>Finder</span></div>
-  <div class="tag" id="screen-tag">Compare</div>
+<header class="tb">
+  <div class="logo">D<span class="accent">UWO</span> · MyAccount</div>
+  <nav class="nav"><a>Dashboard</a><a>Rent</a><a>Repairs</a><a>Documents</a></nav>
+  <div class="right"><span>Truman Hardy</span><div class="avatar">TH</div></div>
 </header>
 
 <main>
   <section id="screen-list">
-    <h1><span id="cat-name">Streaming</span> plans</h1>
-    <p class="subtitle">Pick the cheapest plan within your budget · monthly billing · cancel anytime</p>
+    <div class="greeting">
+      <h1>Hi Truman 👋</h1>
+      <div class="room-pill">Room 4B · Amsterdam</div>
+    </div>
+    <p class="subtitle">Set up your monthly autopay. Pick the plan that matches your tenancy and we'll handle the rest.</p>
     <div class="grid" id="plans"></div>
   </section>
 
   <section id="screen-confirm" class="hidden">
-    <button class="btn ghost" id="btn-back-list" style="margin-bottom: 18px;">← Back to plans</button>
+    <button class="btn ghost" id="btn-back-list" style="margin-bottom: 14px;">← Back to plans</button>
     <div class="confirm-card">
+      <h2>Confirm autopay</h2>
       <div class="summary-row"><span class="k">Provider</span><span class="v" id="c-provider">…</span></div>
       <div class="summary-row"><span class="k">Plan</span><span class="v" id="c-plan">…</span></div>
       <div class="summary-row"><span class="k">Includes</span><span class="v" id="c-features">…</span></div>
-      <div class="summary-row total-row"><span class="k">Monthly</span><span class="v" id="c-monthly">€--</span></div>
+      <div class="summary-row total-row"><span class="k">Monthly autopay</span><span class="v" id="c-monthly">€--</span></div>
     </div>
     <div class="btn-row">
-      <button class="btn" id="btn-confirm">Confirm subscription</button>
+      <button class="btn" id="btn-confirm">Confirm autopay</button>
     </div>
   </section>
 
   <section id="screen-done" class="hidden">
     <div class="done-card">
       <div class="check">✓</div>
-      <h2>Subscription active</h2>
-      <p>You'll be charged on the same day each month.</p>
-      <div class="meta" style="font-size:14px;color:var(--muted)">Monthly cost</div>
-      <div class="ref-badge" id="done-monthly" style="font-size:24px;color:var(--accent);font-weight:700;border:0;">€--</div>
-      <div style="font-size:14px;color:var(--muted);margin-top:8px;" id="done-line">…</div>
+      <h2>Autopay set up</h2>
+      <p>You'll be billed on the same day each month.</p>
+      <div style="font-size:13px;color:var(--muted)">Monthly</div>
+      <div class="ref-badge" id="done-monthly" style="font-size:24px;color:var(--cta-d);font-weight:700;border:0;background:transparent;">€--</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:6px;" id="done-line">…</div>
       <div class="ref-badge" id="done-ref">REF: ……</div>
     </div>
   </section>
@@ -95,17 +131,12 @@ const CATEGORY = "__CATEGORY__";
 
 const $ = (id) => document.getElementById(id);
 const screens = ["screen-list", "screen-confirm", "screen-done"];
-const TAGS = { "screen-list": "Compare", "screen-confirm": "Confirm", "screen-done": "Active" };
 const state = { plan: null };
 
-function show(id) {
-  screens.forEach(s => document.getElementById(s).classList.toggle("hidden", s !== id));
-  $("screen-tag").textContent = TAGS[id] || "";
-}
+function show(id) { screens.forEach(s => document.getElementById(s).classList.toggle("hidden", s !== id)); }
 function fmtEur(v) { return "€" + Number(v).toFixed(2); }
 
 function renderList() {
-  $("cat-name").textContent = CATEGORY.charAt(0).toUpperCase() + CATEGORY.slice(1);
   const root = $("plans");
   root.innerHTML = "";
   for (const p of PLANS) {
@@ -133,7 +164,7 @@ function pick(p) {
 }
 
 function confirm() {
-  const ref = "PF-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+  const ref = "DW-" + Math.random().toString(36).slice(2, 8).toUpperCase();
   $("done-monthly").textContent = fmtEur(state.plan.monthly);
   $("done-line").textContent = `${state.plan.provider} · ${state.plan.plan}`;
   $("done-ref").textContent = "REF: " + ref;

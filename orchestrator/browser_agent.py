@@ -60,22 +60,22 @@ _CURSOR_INJECT_JS = r"""
   const c = document.createElement('div');
   c.id = '__agent_cursor';
   c.style.cssText =
-    'position:fixed;pointer-events:none;width:30px;height:30px;border-radius:50%;'
-    +'background:rgba(255,90,90,0.55);border:3px solid #fff;'
+    'position:fixed;pointer-events:none;width:18px;height:18px;border-radius:50%;'
+    +'background:rgba(255,82,82,0.7);border:2px solid #fff;'
     +'transform:translate(-50%,-50%) scale(1);'
-    +'z-index:99999;box-shadow:0 8px 22px rgba(0,0,0,0.35);'
+    +'z-index:99999;box-shadow:0 4px 14px rgba(0,0,0,0.35);'
     +'left:50%;top:30%;'
-    +'transition:left .35s cubic-bezier(.4,.0,.2,1), top .35s cubic-bezier(.4,.0,.2,1), transform .14s ease, background .12s ease;';
+    +'transition:left .42s cubic-bezier(.4,.0,.2,1), top .42s cubic-bezier(.4,.0,.2,1), transform .12s ease, background .12s ease;';
   document.body.appendChild(c);
 
   const ring = document.createElement('div');
   ring.id = '__agent_ring';
   ring.style.cssText =
-    'position:fixed;pointer-events:none;width:60px;height:60px;border-radius:50%;'
-    +'border:3px solid rgba(255,90,90,0.75);'
+    'position:fixed;pointer-events:none;width:36px;height:36px;border-radius:50%;'
+    +'border:2px solid rgba(255,82,82,0.85);'
     +'transform:translate(-50%,-50%) scale(0);opacity:0;'
     +'z-index:99998;'
-    +'transition:transform .45s ease-out, opacity .45s ease-out;'
+    +'transition:transform .42s ease-out, opacity .42s ease-out;'
     +'left:50%;top:30%;';
   document.body.appendChild(ring);
 }
@@ -137,20 +137,21 @@ async def _click_first_text(page: Page, text: str) -> bool:
             cx = box["x"] + box["width"] / 2
             cy = box["y"] + box["height"] / 2
 
-            # Animate the cursor toward the target across a few frames.
+            # Animate the cursor toward the target across many frames so the
+            # motion looks fluid (~6 frames per ~420 ms transition ~= 14 fps).
             await page.evaluate(_CURSOR_INJECT_JS)
             await _move_cursor(page, cx, cy)
-            # Mid-flight frame
-            await asyncio.sleep(0.12)
-            await _emit_screenshot_quick(page, "→ moving cursor")
-            await asyncio.sleep(0.18)
-            await _emit_screenshot_quick(page, "→ targeting")
+            for delay in (0.06, 0.12, 0.18, 0.24, 0.30):
+                await asyncio.sleep(0.06)
+                await _emit_screenshot_quick(page, f"moving · {int(delay*1000)}ms")
 
             # Click + visual pulse
             await _pulse_cursor(page)
-            await _emit_screenshot_quick(page, "click!")
+            await _emit_screenshot_quick(page, "click")
             await target.click(timeout=2500)
-            await asyncio.sleep(0.20)
+            await asyncio.sleep(0.10)
+            await _emit_screenshot_quick(page, "settling")
+            await asyncio.sleep(0.18)
             await _emit_screenshot_quick(page, "after click")
             await _restore_cursor(page)
             return True
