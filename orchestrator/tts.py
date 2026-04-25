@@ -24,7 +24,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_DIR = PROJECT_ROOT / "assets" / "tts_cache"  # path retained for server compat
 RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_MODEL = "eleven_turbo_v2_5"
+# `eleven_multilingual_v2` is ElevenLabs' most natural-sounding production model
+# — slightly higher latency than turbo, much warmer prosody for narration.
+DEFAULT_MODEL = "eleven_multilingual_v2"
 TTL_SECONDS = 5 * 60  # prune audio files older than 5 minutes
 
 
@@ -62,13 +64,16 @@ def synthesize_narration(
 
     out = RUNTIME_DIR / f"{int(time.time() * 1000):x}_{secrets.token_hex(3)}.mp3"
 
-    # Slight per-call jitter in voice settings so repeated phrases sound natural,
-    # not karaoke-perfect identical.
+    # Tuned for the most natural Rachel-style narration:
+    # - low-ish stability gives organic pitch variation (not robotic-flat).
+    # - high similarity_boost keeps it recognisably the chosen voice.
+    # - style ~0.45 introduces expressiveness without sounding theatrical.
+    # Per-call jitter so identical phrases never sound karaoke-perfect identical.
     rng = random.Random(out.name)
     settings = {
-        "stability": round(rng.uniform(0.40, 0.55), 2),
-        "similarity_boost": round(rng.uniform(0.70, 0.82), 2),
-        "style": round(rng.uniform(0.15, 0.35), 2),
+        "stability":        round(rng.uniform(0.30, 0.42), 2),
+        "similarity_boost": round(rng.uniform(0.82, 0.92), 2),
+        "style":            round(rng.uniform(0.35, 0.55), 2),
         "use_speaker_boost": True,
     }
 

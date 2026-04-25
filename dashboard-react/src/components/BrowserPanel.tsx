@@ -1,43 +1,35 @@
 import { useEffect, useState } from "react";
 import { Globe } from "lucide-react";
+import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 export interface BrowserPanelState {
   visible: boolean;
-  zoomed: boolean;
+  /** legacy field — ignored */
+  zoomed?: boolean;
   line: string;
   step: string;
-  shotData: string | null;   // base64 PNG
+  shotData: string | null;
   changing: boolean;
 }
 
-interface Props {
-  state: BrowserPanelState;
-}
-
-export function BrowserPanel({ state }: Props) {
-  const [animKey, setAnimKey] = useState(0);
-  // Force a key bump on shot change for tw-animate fade transitions.
-  useEffect(() => { setAnimKey((k) => k + 1); }, [state.shotData]);
-
+export function BrowserPanel({ state }: { state: BrowserPanelState }) {
+  const [shotKey, setShotKey] = useState(0);
+  useEffect(() => { setShotKey((k) => k + 1); }, [state.shotData]);
   if (!state.visible) return null;
-
   return (
-    <>
-      {state.zoomed && (
-        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 animate-in fade-in duration-default ease-out" />
-      )}
-      <Card
-        className={cn(
-          "transition-[transform,box-shadow,border-radius] duration-slow ease-out origin-top",
-          state.zoomed
-            ? "fixed inset-[4vh_5vw] z-50 shadow-[0_60px_120px_rgba(0,0,0,0.6),0_0_0_1px_var(--color-border)]"
-            : "relative",
-        )}
-      >
-        <div className="flex items-center gap-3 p-4 border-b border-border">
+    <motion.div
+      layout
+      initial={{ opacity: 0, scale: 0.97 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.97 }}
+      transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+      className="h-full flex flex-col"
+    >
+      <Card className="h-full flex flex-col p-0 overflow-hidden">
+        <div className="flex items-center gap-3 p-3 border-b border-border/70 shrink-0">
           <span className="w-7 h-7 rounded border border-border bg-secondary grid place-items-center">
             <Globe className="w-3.5 h-3.5 text-paper-400" />
           </span>
@@ -45,31 +37,29 @@ export function BrowserPanel({ state }: Props) {
             <div className="label-uc text-muted-foreground">Browser agent</div>
             <div className="text-body text-foreground truncate">{state.line}</div>
           </div>
-          <Badge variant="outline" className="font-mono tabular">{state.step}</Badge>
+          <Badge variant="outline" className="font-mono tabular shrink-0">{state.step}</Badge>
         </div>
         <div
           className={cn(
-            "rounded-md overflow-hidden bg-paper-950 border border-border m-4 mt-3",
-            state.zoomed ? "flex-1 min-h-0" : "aspect-[1100/760] min-h-[220px]",
+            "flex-1 min-h-0 m-3 mt-2 rounded-md overflow-hidden bg-paper-950 border border-border/70",
             "grid place-items-center",
           )}
         >
           {state.shotData ? (
-            <img
-              key={animKey}
+            <motion.img
+              key={shotKey}
+              initial={{ opacity: 0.65 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
               src={`data:image/png;base64,${state.shotData}`}
-              className={cn(
-                "w-full h-full object-contain",
-                "animate-in fade-in duration-default ease-out",
-                state.changing && "opacity-70"
-              )}
-              alt="browser agent screenshot"
+              className="w-full h-full object-contain"
+              alt=""
             />
           ) : (
             <div className="text-muted-foreground text-meta">Loading…</div>
           )}
         </div>
       </Card>
-    </>
+    </motion.div>
   );
 }

@@ -4,8 +4,15 @@
 bunq_context.json
 *.key
 *.pem
+google_oauth_client.json
+
+# React / Vite
 dashboard-react/node_modules/
 dashboard-react/dist/
+
+# Runtime artefacts
+assets/tts_cache/
+.pytest_cache/
 
 # Python
 __pycache__/
@@ -20,3 +27,6 @@ venv/
 .vscode/
 *.swp
 *.swo
+
+# OS
+.DS_Store

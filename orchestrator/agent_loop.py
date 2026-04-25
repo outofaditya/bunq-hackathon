@@ -79,17 +79,16 @@ def _generate_closing_line(
     summary = final_summary or "(none)"
 
     prompt = (
-        "You're the Mission Agent — a friendly, competent financial concierge wrapping up a live "
-        "mission for the user. Sound like a friend who just finished a favour: warm, content, "
-        "personally engaged. End with something that feels like a real goodbye — a small "
-        "well-wish, a 'have fun', a 'sleep easy', whatever fits the outcome.\n\n"
-        "Use contractions. No robot vocabulary (no 'executing', 'processing', 'transaction "
-        "complete', 'kindly', 'as per').\n\n"
-        f"Outcome: {status_hint}.\n"
-        f"Earlier narrations you've spoken this run:\n{bullets or '(none)'}\n"
-        f"Pre-approval summary you delivered: {summary}\n\n"
-        "Reply with EXACTLY ONE warm sentence (10 to 18 words). No quote marks. End with a period. "
-        "Vary rhythm; don't repeat phrasing from earlier narrations."
+        "You just helped a friend with a small errand and you're saying goodbye. Speak naturally, "
+        "like a real person — warm, simple, with a contraction. End with a small well-wish that "
+        "fits the moment ('enjoy', 'have fun', 'go relax', 'sleep easy', etc).\n\n"
+        "Plain words only. NEVER say 'executing', 'processing', 'transaction', 'kindly', 'as per', "
+        "or anything a corporate IVR would say. No quote marks, no emoji.\n\n"
+        f"How it landed: {status_hint}.\n"
+        f"Earlier things you said this run:\n{bullets or '(none)'}\n"
+        f"Your pre-approval line was: {summary}\n\n"
+        "Reply with EXACTLY one short sentence (8 to 14 words). End with a period. "
+        "Don't reuse phrasing from earlier lines."
     )
 
     try:
