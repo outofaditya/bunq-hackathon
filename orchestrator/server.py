@@ -30,11 +30,13 @@ from typing import Any
 import httpx
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from bunq_client import BunqClient
+
+import anthropic
 
 from .agent_loop import run_mission
 from .bunq_tools import BunqToolbox
@@ -49,7 +51,9 @@ load_dotenv(override=True)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DASHBOARD_HTML = PROJECT_ROOT / "dashboard" / "index.html"
+REACT_DIST = PROJECT_ROOT / "dashboard-react" / "dist"
+LEGACY_HTML = PROJECT_ROOT / "dashboard" / "index.html"
+DASHBOARD_HTML = REACT_DIST / "index.html" if REACT_DIST.exists() else LEGACY_HTML
 ASSETS_DIR = PROJECT_ROOT / "assets"
 TTS_CACHE_DIR = ASSETS_DIR / "tts_cache"
 MOCK_SITES_DIR = PROJECT_ROOT / "mock_sites"
@@ -136,6 +140,22 @@ async def _startup() -> None:
 @app.get("/")
 async def root() -> FileResponse:
     return FileResponse(str(DASHBOARD_HTML))
+
+
+# Vite emits JS/CSS chunks into dist/assets/. The /assets/* path is also
+# used by mission audio (recorded_voice_*.mp3) so we have a precedence:
+# check the React build first, fall back to the project assets dir.
+@app.get("/assets/{filename:path}")
+async def serve_react_or_audio(filename: str) -> FileResponse:
+    react_path = REACT_DIST / "assets" / filename
+    if react_path.exists() and ".." not in filename:
+        media = "application/javascript" if filename.endswith(".js") else "text/css" if filename.endswith(".css") else None
+        return FileResponse(str(react_path), media_type=media) if media else FileResponse(str(react_path))
+    legacy = ASSETS_DIR / filename
+    if legacy.exists() and ".." not in filename:
+        media = "audio/mpeg" if filename.endswith(".mp3") else None
+        return FileResponse(str(legacy), media_type=media) if media else FileResponse(str(legacy))
+    return FileResponse(str(ASSETS_DIR / "missing"))
 
 
 # ----- SSE event stream -----------------------------------------------
@@ -255,21 +275,189 @@ async def start_mission_from_voice(name: str, request: Request) -> dict[str, Any
     return {"ok": True, "transcript": transcript, "mission": name}
 
 
+def _classify_mission(transcript: str) -> str:
+    """Map a free-text spoken command to one of weekend/payday/travel."""
+    transcript = (transcript or "").strip()
+    if not transcript:
+        return "weekend"
+    # Cheap keyword fast-path before we burn an LLM token.
+    t = transcript.lower()
+    if any(k in t for k in ["payday", "salary", "rent", "bills", "monthly", "duwo"]):
+        return "payday"
+    if any(k in t for k in ["fly", "flight", "trip", "travel", "tokyo", "abroad", "vacation", "holiday"]):
+        return "travel"
+    if any(k in t for k in ["weekend", "dinner", "restaurant", "concert", "sara", "surprise"]):
+        return "weekend"
+
+    # Fallback: ask Claude. Cheap Haiku call.
+    try:
+        client = anthropic.Anthropic()
+        model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip() or "claude-haiku-4-5-20251001"
+        resp = client.messages.create(
+            model=model,
+            max_tokens=8,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Classify the user's spoken command into ONE mission name and reply with "
+                    "exactly that word and nothing else: weekend, payday, travel.\n\n"
+                    f"Command: {transcript}"
+                ),
+            }],
+        )
+        text = ""
+        for b in resp.content:
+            if getattr(b, "type", None) == "text":
+                text += b.text
+        text = text.strip().lower().split()[0] if text.strip() else "weekend"
+        return text if text in ("weekend", "payday", "travel") else "weekend"
+    except Exception:
+        return "weekend"
+
+
+@app.post("/missions/auto/start-from-mic")
+async def start_mission_from_mic_auto(
+    audio: UploadFile = File(...),
+    seed_eur: float = Form(500.0),
+    wait_seconds: float = Form(60.0),
+) -> dict[str, Any]:
+    """Auto-route flow: upload a voice clip, we classify the mission from the
+    transcript, then run it. Returns the chosen mission + transcript."""
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        return {"ok": False, "error": "Empty audio upload"}
+
+    bus.reset()
+    bus.publish("voice_capture_started", {"mission": "auto", "live": True, "size_bytes": len(audio_bytes)})
+    try:
+        transcript = transcribe_bytes(audio_bytes, filename=audio.filename or "recording.webm")
+    except Exception as e:  # noqa: BLE001
+        bus.publish("voice_capture_error", {"error": str(e)})
+        return {"ok": False, "error": f"STT failed: {e}"}
+    if not transcript:
+        bus.publish("voice_capture_error", {"error": "empty transcript"})
+        return {"ok": False, "error": "Empty transcript — was the mic muted?"}
+
+    name = _classify_mission(transcript)
+    bus.publish("transcript_ready", {"text": transcript, "live": True, "mission": name})
+    bus.publish("mission_routed", {"mission": name, "display": MISSIONS[name]["display_name"]})
+
+    global _mission_thread
+    if _mission_thread is not None and _mission_thread.is_alive():
+        return {"ok": False, "error": "A mission is already running."}
+
+    def _run() -> None:
+        tb = _get_toolbox()
+        try:
+            if seed_eur > 0:
+                tb.seed_primary(seed_eur)
+                tb.snapshot_balance("seed")
+            run_mission(
+                toolbox=tb,
+                system_prompt=MISSIONS[name]["system_prompt"],
+                user_prompt=transcript,
+                wait_for_draft=True,
+                wait_timeout_s=wait_seconds,
+            )
+        except Exception as e:  # noqa: BLE001
+            bus.publish("mission_error", {"error": str(e)})
+
+    _mission_thread = threading.Thread(target=_run, daemon=True, name=f"mission-{name}-auto")
+    _mission_thread.start()
+    return {"ok": True, "transcript": transcript, "mission": name}
+
+
+@app.post("/missions/{name}/start-from-mic")
+async def start_mission_from_mic(
+    name: str,
+    audio: UploadFile = File(...),
+    seed_eur: float = Form(500.0),
+    wait_seconds: float = Form(60.0),
+) -> dict[str, Any]:
+    """Live-mic flow. Browser uploads recorded audio (typically webm/opus);
+    we transcribe via ElevenLabs Scribe and kick the cascade.
+    """
+    if name not in MISSIONS:
+        return {"ok": False, "error": f"Unknown mission: {name}"}
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        return {"ok": False, "error": "Empty audio upload"}
+
+    bus.reset()
+    bus.publish("voice_capture_started", {"mission": name, "live": True, "size_bytes": len(audio_bytes)})
+    try:
+        transcript = transcribe_bytes(
+            audio_bytes,
+            filename=audio.filename or "recording.webm",
+        )
+    except Exception as e:  # noqa: BLE001
+        bus.publish("voice_capture_error", {"error": str(e)})
+        return {"ok": False, "error": f"STT failed: {e}"}
+
+    if not transcript:
+        bus.publish("voice_capture_error", {"error": "empty transcript"})
+        return {"ok": False, "error": "Empty transcript — was the mic muted?"}
+
+    bus.publish("transcript_ready", {"text": transcript, "live": True})
+
+    global _mission_thread
+    if _mission_thread is not None and _mission_thread.is_alive():
+        return {"ok": False, "error": "A mission is already running."}
+
+    def _run() -> None:
+        tb = _get_toolbox()
+        try:
+            if seed_eur > 0:
+                tb.seed_primary(seed_eur)
+                tb.snapshot_balance("seed")
+            run_mission(
+                toolbox=tb,
+                system_prompt=MISSIONS[name]["system_prompt"],
+                user_prompt=transcript,
+                wait_for_draft=True,
+                wait_timeout_s=wait_seconds,
+            )
+        except Exception as e:  # noqa: BLE001
+            bus.publish("mission_error", {"error": str(e)})
+
+    _mission_thread = threading.Thread(target=_run, daemon=True, name=f"mission-{name}-mic")
+    _mission_thread.start()
+    return {"ok": True, "transcript": transcript, "mission": name}
+
+
+_OPENING_LINES: list[str] = [
+    "Alright, what's the mission?",
+    "I'm listening — go ahead.",
+    "Hit me with it.",
+    "Tell me what you need.",
+    "Ready when you are.",
+    "Okay, what are we doing?",
+]
+
+
+@app.post("/tts/opening")
+async def tts_opening() -> dict[str, Any]:
+    """Pre-synthesize a short greeting line — dashboard plays it the moment
+    the user taps the mic button so the agent feels alive, not silent."""
+    import random as _random
+
+    from .tts import synthesize_narration
+
+    line = _random.choice(_OPENING_LINES)
+    try:
+        fname = synthesize_narration(line)
+        return {"ok": True, "text": line, "url": f"/tts/{fname}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e), "text": line}
+
+
 @app.get("/tts/{filename}")
 async def serve_tts(filename: str) -> FileResponse:
     p = TTS_CACHE_DIR / filename
     if not p.exists() or ".." in filename or "/" in filename:
         return FileResponse(str(TTS_CACHE_DIR / "missing"))  # 404-ish
     return FileResponse(str(p), media_type="audio/mpeg")
-
-
-@app.get("/assets/{filename}")
-async def serve_asset(filename: str) -> FileResponse:
-    p = ASSETS_DIR / filename
-    if not p.exists() or ".." in filename or "/" in filename:
-        return FileResponse(str(ASSETS_DIR / "missing"))
-    media_type = "audio/mpeg" if filename.endswith(".mp3") else "application/octet-stream"
-    return FileResponse(str(p), media_type=media_type)
 
 
 # Real-data booking site — restaurants come from Google Places API (or a

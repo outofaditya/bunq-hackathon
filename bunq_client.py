@@ -157,7 +157,15 @@ class BunqClient:
         json_body = body if method in ("POST", "PUT") else None
 
         resp = requests.request(method, url, headers=headers, json=json_body, params=params)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text[:500]
+            raise requests.HTTPError(
+                f"{resp.status_code} {resp.reason} on {method} /{endpoint}: {detail}",
+                response=resp,
+            )
         return resp.json().get("Response", [])
 
     def _raw_post(self, endpoint: str, body: dict, auth_token: str | None) -> list:
@@ -178,7 +186,15 @@ class BunqClient:
         headers["X-Bunq-Client-Signature"] = self._sign(body_bytes)
 
         resp = requests.post(url, headers=headers, data=body_bytes)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text[:500]
+            raise requests.HTTPError(
+                f"{resp.status_code} {resp.reason} on POST /{endpoint}: {detail}",
+                response=resp,
+            )
         return resp.json().get("Response", [])
 
     def _build_headers(self, body: dict | None = None) -> dict:
