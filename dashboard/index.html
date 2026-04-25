@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mission Mode · bunq</title>
+<style>
+  :root {
+    --bg: #0a0d14;
+    --card: #111521;
+    --card-2: #161b29;
+    --line: #1d2333;
+    --text: #f3f6f7;
+    --muted: #8290a8;
+    --cyan: #00e2c4;
+    --cyan-soft: rgba(0, 226, 196, 0.18);
+    --pink: #ff6aa6;
+    --orange: #ff9d4d;
+    --yellow: #ffd24a;
+    --violet: #8a7dff;
+    --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font: 15px/1.5 "SF Pro Display", "Inter", system-ui, sans-serif;
+    background: radial-gradient(1200px 800px at 80% -20%, #14202e 0%, #0a0d14 60%, #06080d 100%);
+    color: var(--text);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--line);
+    gap: 16px;
+  }
+  .logo {
+    font: 700 22px/1 system-ui, sans-serif;
+    letter-spacing: -0.01em;
+  }
+  .logo .pill {
+    background: var(--text);
+    color: var(--bg);
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .topbar .status {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .status .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--muted);
+  }
+  .status.live { color: var(--cyan); }
+  .status.live .dot {
+    background: var(--cyan);
+    box-shadow: 0 0 12px var(--cyan);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    gap: 24px;
+    padding: 24px 32px 120px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* Sidebar */
+  .sidebar { display: flex; flex-direction: column; gap: 16px; }
+
+  .balance-card {
+    background: linear-gradient(135deg, #1a2438 0%, #0e1320 100%);
+    border-radius: 22px;
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .balance-card::before {
+    content: "";
+    position: absolute;
+    inset: -40% -10% auto auto;
+    width: 220px;
+    height: 220px;
+    background: radial-gradient(closest-side, var(--cyan-soft) 0%, transparent 70%);
+    opacity: 0.7;
+    pointer-events: none;
+  }
+  .balance-card .label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .balance-card .balance {
+    font: 700 44px/1 "SF Pro Display", system-ui, sans-serif;
+    letter-spacing: -0.02em;
+    transition: color 0.4s, transform 0.4s;
+  }
+  .balance-card .balance.flash {
+    color: var(--cyan);
+    text-shadow: 0 0 24px rgba(0, 226, 196, 0.4);
+    transform: translateY(-2px);
+  }
+  .balance-card .meta {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .start-card {
+    background: linear-gradient(135deg, #ff8048 0%, #ff5e8a 100%);
+    border-radius: 22px;
+    padding: 24px;
+    color: #1a0a14;
+  }
+  .start-card .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: 0.8;
+    font-weight: 600;
+  }
+  .start-card h2 {
+    font: 700 22px/1.2 system-ui, sans-serif;
+    margin: 6px 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .start-card p {
+    margin: 0 0 16px;
+    font-size: 13px;
+    opacity: 0.9;
+  }
+  .start-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .start-btn {
+    background: #1a0a14;
+    color: #fff;
+    border: 0;
+    border-radius: 999px;
+    padding: 12px 22px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    letter-spacing: 0.01em;
+    transition: filter 0.2s, transform 0.05s;
+  }
+  .start-btn.ghost {
+    background: rgba(255, 255, 255, 0.16);
+    color: rgba(26, 10, 20, 0.9);
+    backdrop-filter: blur(2px);
+    font-weight: 500;
+  }
+  .start-btn.primary { background: #1a0a14; }
+  .start-btn:hover { filter: brightness(1.15); }
+  .start-btn:active { transform: translateY(1px); }
+  .start-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+  .voice-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 18px 20px;
+    display: none;
+    align-items: center;
+    gap: 14px;
+  }
+  .voice-card.show { display: flex; }
+  .voice-card .vc-icon {
+    width: 48px; height: 48px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, var(--violet), #5b4ed1);
+    display: grid; place-items: center;
+    font-size: 22px;
+    flex-shrink: 0;
+  }
+  .voice-card .vc-text { flex: 1; min-width: 0; }
+  .voice-card .vc-eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 3px;
+  }
+  .voice-card .vc-line {
+    font: 500 15px/1.3 system-ui;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .info-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 22px;
+  }
+  .info-card .label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .info-card .info-line { font-size: 13px; line-height: 1.7; }
+  .info-card .info-line b { font-weight: 600; }
+  .info-card .info-line code { font-family: ui-monospace, "SF Mono", monospace; font-size: 12px; color: var(--cyan); }
+
+  /* Main */
+  main { display: flex; flex-direction: column; gap: 16px; }
+  .section-label {
+    font: 600 11px/1 system-ui;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 8px 4px 4px;
+  }
+
+  .empty-state {
+    background: var(--card);
+    border: 1px dashed var(--line);
+    border-radius: 22px;
+    padding: 60px 30px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .empty-state .big { font-size: 36px; margin-bottom: 8px; }
+  .empty-state .small { font-size: 13px; }
+
+  .tiles { display: grid; grid-template-columns: 1fr; gap: 14px; }
+
+  .tile {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 22px;
+    display: grid;
+    grid-template-columns: 88px 1fr auto;
+    gap: 20px;
+    align-items: center;
+    transform: translateY(8px);
+    opacity: 0;
+    animation: tile-in 0.45s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s, background 0.3s;
+  }
+  @keyframes tile-in {
+    to { transform: translateY(0); opacity: 1; }
+  }
+  .tile.active {
+    border-color: var(--cyan);
+    background: linear-gradient(135deg, rgba(0, 226, 196, 0.08), var(--card));
+  }
+  .tile.active::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(110deg, transparent 30%, rgba(0, 226, 196, 0.18) 50%, transparent 70%);
+    background-size: 250% 100%;
+    animation: sweep 1.6s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+  .tile.done { border-color: var(--line); }
+  .tile.error {
+    border-color: var(--danger);
+    background: linear-gradient(135deg, rgba(255, 107, 107, 0.08), var(--card));
+  }
+
+  .tile .icon {
+    width: 88px;
+    height: 88px;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    font-size: 42px;
+    background: linear-gradient(135deg, var(--card-2), #0c1120);
+    border: 1px solid var(--line);
+  }
+  .tile.active .icon {
+    background: linear-gradient(135deg, rgba(0, 226, 196, 0.18), rgba(0, 226, 196, 0.05));
+    border-color: rgba(0, 226, 196, 0.35);
+  }
+  .tile.done.success .icon {
+    background: linear-gradient(135deg, rgba(0, 226, 196, 0.12), rgba(0, 226, 196, 0.03));
+    border-color: rgba(0, 226, 196, 0.25);
+  }
+  .tile .body { min-width: 0; }
+  .tile .tool {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .tile .title {
+    font: 600 18px/1.25 "SF Pro Display", system-ui;
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .tile .desc { color: var(--muted); font-size: 13px; }
+  .tile .ids {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  .tile .right {
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  .tile .amt {
+    font: 700 22px/1 "SF Pro Display", system-ui;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  .tile .amt.neg { color: var(--pink); }
+  .tile .amt.pending { color: var(--yellow); }
+  .tile .badge {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.04em;
+    border: 1px solid currentColor;
+    text-transform: uppercase;
+  }
+  .badge.running { color: var(--cyan); }
+  .badge.done { color: var(--cyan); background: rgba(0, 226, 196, 0.12); border-color: transparent; }
+  .badge.pending { color: var(--yellow); }
+  .badge.error { color: var(--danger); }
+
+  .draft-banner {
+    background: linear-gradient(135deg, rgba(255, 210, 74, 0.18), rgba(255, 157, 77, 0.08));
+    border: 1px solid var(--yellow);
+    border-radius: 22px;
+    padding: 22px 24px;
+    display: none;
+    align-items: center;
+    gap: 18px;
+  }
+  .draft-banner.show { display: flex; }
+  .draft-banner .draft-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    font-size: 28px;
+    background: rgba(255, 210, 74, 0.22);
+  }
+  .draft-banner h3 { margin: 0; font: 600 17px/1.2 system-ui; letter-spacing: -0.01em; }
+  .draft-banner p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  .draft-banner.resolved {
+    background: linear-gradient(135deg, rgba(0, 226, 196, 0.18), rgba(0, 226, 196, 0.05));
+    border-color: var(--cyan);
+  }
+  .draft-banner.resolved .draft-icon { background: rgba(0, 226, 196, 0.22); }
+
+  .summary-card {
+    background: linear-gradient(135deg, rgba(0, 226, 196, 0.18), rgba(138, 125, 255, 0.10));
+    border: 1px solid var(--cyan);
+    border-radius: 22px;
+    padding: 24px;
+    display: none;
+  }
+  .summary-card.show { display: block; }
+  .summary-card .label {
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .summary-card .summary-text {
+    font: 600 20px/1.35 "SF Pro Display", system-ui;
+    letter-spacing: -0.01em;
+  }
+
+  .narration-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: rgba(11, 14, 22, 0.88);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--line);
+    padding: 22px 32px;
+    text-align: center;
+    transform: translateY(110%);
+    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  .narration-bar.show { transform: translateY(0); }
+  .narration-bar .narr {
+    font: 500 18px/1.4 "SF Pro Display", system-ui;
+    letter-spacing: -0.01em;
+    color: var(--text);
+    font-style: italic;
+  }
+  .narration-bar .narr::before { content: "“"; opacity: 0.4; margin-right: 4px; }
+  .narration-bar .narr::after { content: "”"; opacity: 0.4; margin-left: 4px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">Mission <span class="pill">bunq</span></div>
+  <span id="conn" class="status"><span class="dot"></span><span id="conn-label">Connecting…</span></span>
+</div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="balance-card">
+      <div class="label">Primary balance</div>
+      <div id="balance" class="balance">€--</div>
+      <div id="balance-meta" class="meta">awaiting first event</div>
+    </div>
+
+    <div class="start-card">
+      <div class="eyebrow">Hero mission</div>
+      <h2>Surprise Weekend</h2>
+      <p>€500 budget · 3 actions · 1 phone-tap approval. Watch your money plan a weekend in 90 seconds.</p>
+      <div class="start-row">
+        <button class="start-btn primary" id="start-voice" disabled>🎙️ Voice mission</button>
+        <button class="start-btn ghost" id="start" disabled>▸ Text only</button>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <div class="label">Account</div>
+      <div id="user-info" class="info-line">…</div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="voice-card" id="voice-card">
+      <div class="vc-icon">🎙️</div>
+      <div class="vc-text">
+        <div class="vc-eyebrow" id="vc-label">Listening to you…</div>
+        <div class="vc-line" id="vc-line">…</div>
+      </div>
+    </div>
+    <div class="section-label">Cascade</div>
+    <div class="tiles" id="tiles"></div>
+    <div id="empty" class="empty-state">
+      <div class="big">🎯</div>
+      <div class="small">Tap <b>Start mission</b> to watch the cascade execute.</div>
+    </div>
+    <div class="draft-banner" id="draft">
+      <div class="draft-icon">⏳</div>
+      <div>
+        <h3 id="draft-title">Awaiting your tap</h3>
+        <p id="draft-msg">A draft payment is pending approval on your bunq sandbox app…</p>
+      </div>
+    </div>
+    <div class="summary-card" id="summary">
+      <div class="label">Mission complete</div>
+      <div class="summary-text" id="summary-text"></div>
+    </div>
+  </main>
+</div>
+
+<div class="narration-bar" id="narration-bar">
+  <div class="narr" id="narration"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+const ICONS = {
+  pay_vendor_default: "🧾",
+  pay_vendor_restaurant: "🍝",
+  pay_vendor_uber: "🚗",
+  pay_vendor_concert: "🎫",
+  create_draft_payment: "🎫",
+  create_sub_account: "🪙",
+  fund_sub_account: "💸",
+  schedule_recurring_payment: "🔁",
+  request_money: "📨",
+  create_bunqme_link: "🔗",
+};
+
+function vendorIcon(vendor) {
+  const v = (vendor || "").toLowerCase();
+  if (v.includes("café") || v.includes("klos") || v.includes("rest")) return "🍝";
+  if (v.includes("uber") || v.includes("ride") || v.includes("taxi")) return "🚗";
+  if (v.includes("ticket") || v.includes("master") || v.includes("concert")) return "🎫";
+  return "🧾";
+}
+
+function fmtEur(v) {
+  if (v === null || v === undefined) return "€--";
+  const n = Number(v);
+  return "€" + n.toLocaleString("en-EU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+const tilesEl = $("tiles");
+const tilesByName = []; // FIFO of pending step_started → step_finished pairs
+
+function pickIconFor(payload) {
+  if (payload.tool === "pay_vendor")           return vendorIcon(payload.vendor);
+  if (payload.tool === "create_draft_payment") return "🎫";
+  return ICONS[payload.tool] || "🧾";
+}
+
+function renderStarted(payload) {
+  const tile = document.createElement("div");
+  tile.className = "tile active";
+  const icon = pickIconFor(payload);
+  let title = payload.tool;
+  let desc = "";
+  let amount = "";
+  let amountClass = "";
+
+  if (payload.tool === "pay_vendor") {
+    title = `Pay ${payload.vendor || "vendor"}`;
+    desc = payload.description || "";
+    amount = "−" + fmtEur(payload.amount_eur);
+    amountClass = "neg";
+  } else if (payload.tool === "create_draft_payment") {
+    title = `Draft → ${payload.vendor}`;
+    desc = (payload.description || "") + " · awaiting your phone tap";
+    amount = fmtEur(payload.amount_eur);
+    amountClass = "pending";
+  } else if (payload.tool === "create_sub_account") {
+    title = `Create sub-account: ${payload.name || ""}`;
+  } else if (payload.tool === "fund_sub_account") {
+    title = `Fund sub-account`;
+    amount = fmtEur(payload.amount_eur);
+  } else if (payload.tool === "schedule_recurring_payment") {
+    title = `Schedule ${payload.unit || "WEEKLY"} payment`;
+    amount = fmtEur(payload.amount_eur);
+  } else if (payload.tool === "request_money") {
+    title = `Request money`;
+    desc = payload.description || "";
+    amount = fmtEur(payload.amount_eur);
+  } else if (payload.tool === "create_bunqme_link") {
+    title = `Create share link`;
+    desc = payload.description || "";
+    amount = fmtEur(payload.amount_eur);
+  }
+
+  tile.innerHTML = `
+    <div class="icon">${icon}</div>
+    <div class="body">
+      <div class="tool">${payload.tool}</div>
+      <div class="title">${title}</div>
+      <div class="desc">${desc}</div>
+      <div class="ids" data-ids></div>
+    </div>
+    <div class="right">
+      <div class="amt ${amountClass}">${amount}</div>
+      <div class="badge running">Running</div>
+    </div>
+  `;
+  tilesEl.appendChild(tile);
+  tilesByName.push(tile);
+  $("empty").style.display = "none";
+}
+
+function renderFinished(payload) {
+  const tile = tilesByName.shift();
+  if (!tile) return;
+  tile.classList.remove("active");
+  tile.classList.add("done", "success");
+
+  const r = payload.result || {};
+  const idsEl = tile.querySelector("[data-ids]");
+  if (r.payment_id)         idsEl.textContent = `payment_id=${r.payment_id}`;
+  else if (r.draft_id)      idsEl.textContent = `draft_id=${r.draft_id} · pending €${r.amount_eur}`;
+  else if (r.sub_account_id) idsEl.textContent = `sub_id=${r.sub_account_id} · ${r.iban || ""}`;
+  else if (r.schedule_id)   idsEl.textContent = `schedule_id=${r.schedule_id}`;
+  else if (r.request_id)    idsEl.textContent = `request_id=${r.request_id}`;
+  else if (r.bunqme_tab_id) idsEl.textContent = `tab_id=${r.bunqme_tab_id}`;
+
+  const badge = tile.querySelector(".badge");
+  if (badge) {
+    if (payload.tool === "create_draft_payment") {
+      badge.className = "badge pending";
+      badge.textContent = "Pending tap";
+    } else {
+      badge.className = "badge done";
+      badge.textContent = "Done";
+    }
+  }
+}
+
+function renderError(payload) {
+  const tile = tilesByName.shift();
+  if (!tile) return;
+  tile.classList.remove("active");
+  tile.classList.add("done", "error");
+  const badge = tile.querySelector(".badge");
+  if (badge) {
+    badge.className = "badge error";
+    badge.textContent = "Error";
+  }
+  const idsEl = tile.querySelector("[data-ids]");
+  if (idsEl) idsEl.textContent = "ERROR: " + (payload.error || "");
+}
+
+function showNarration(text) {
+  $("narration").textContent = text;
+  $("narration-bar").classList.add("show");
+  clearTimeout(showNarration._t);
+  showNarration._t = setTimeout(() => $("narration-bar").classList.remove("show"), 6500);
+}
+
+function flashBalance(value, stepLabel) {
+  const b = $("balance");
+  b.textContent = fmtEur(value);
+  b.classList.remove("flash");
+  // force reflow so the animation restarts
+  void b.offsetWidth;
+  b.classList.add("flash");
+  $("balance-meta").textContent = `after ${stepLabel}`;
+}
+
+function resetUI() {
+  tilesEl.innerHTML = "";
+  tilesByName.length = 0;
+  $("empty").style.display = "block";
+  const draft = $("draft");
+  draft.classList.remove("show", "resolved");
+  $("draft-title").textContent = "Awaiting your tap";
+  $("summary").classList.remove("show");
+  $("summary-text").textContent = "";
+  $("narration-bar").classList.remove("show");
+  $("voice-card").classList.remove("show");
+  audioQueue.length = 0;
+  if (currentAudio) { try { currentAudio.pause(); } catch {} currentAudio = null; }
+}
+
+// ---- audio (TTS) playback queue ----
+const audioQueue = [];
+let currentAudio = null;
+
+function playNextAudio() {
+  if (currentAudio || !audioQueue.length) return;
+  const url = audioQueue.shift();
+  currentAudio = new Audio(url);
+  currentAudio.onended = currentAudio.onerror = () => {
+    currentAudio = null;
+    playNextAudio();
+  };
+  currentAudio.play().catch((e) => {
+    console.warn("audio play blocked:", e);
+    currentAudio = null;
+    playNextAudio();
+  });
+}
+
+function enqueueAudio(url) {
+  audioQueue.push(url);
+  playNextAudio();
+}
+
+function handle(ev) {
+  switch (ev.type) {
+    case "mission_started":           resetUI(); break;
+    case "balance_snapshot":          flashBalance(ev.primary_balance_eur, ev.step); break;
+    case "step_started":              renderStarted(ev); break;
+    case "step_finished":             renderFinished(ev); break;
+    case "step_error":                renderError(ev); break;
+    case "narrate":                   showNarration(ev.text); break;
+    case "narrate_audio":             enqueueAudio(ev.url); break;
+    case "voice_capture_started": {
+      $("voice-card").classList.add("show");
+      $("vc-label").textContent = "Listening…";
+      $("vc-line").textContent = "Transcribing your mission with ElevenLabs Scribe.";
+      // Play the user's pre-recorded audio so the audience hears the spoken command.
+      if (ev.audio_url) {
+        try {
+          const a = new Audio(ev.audio_url);
+          a.play().catch(() => {});
+        } catch {}
+      }
+      break;
+    }
+    case "transcript_ready": {
+      $("voice-card").classList.add("show");
+      $("vc-label").textContent = "Transcript";
+      $("vc-line").textContent = "“" + (ev.text || "") + "”";
+      break;
+    }
+    case "voice_capture_error": {
+      $("voice-card").classList.add("show");
+      $("vc-label").textContent = "Speech-to-text failed";
+      $("vc-line").textContent = ev.error || "";
+      break;
+    }
+    case "awaiting_draft_approval": {
+      $("draft").classList.add("show");
+      $("draft-title").textContent = "Awaiting your tap";
+      $("draft-msg").textContent = `Tap Approve in the bunq sandbox app to release the pending payment. Polling for up to ${(ev.timeout_s || 60) | 0}s…`;
+      break;
+    }
+    case "draft_resolved":
+    case "draft_final": {
+      const d = $("draft");
+      d.classList.add("show", "resolved");
+      d.querySelector(".draft-icon").textContent = ev.status === "ACCEPTED" ? "✓" : "•";
+      $("draft-title").textContent = ev.status === "ACCEPTED" ? "Approved" : `Draft ${ev.status}`;
+      $("draft-msg").textContent = `Draft ${ev.draft_id} → ${ev.status}.`;
+      break;
+    }
+    case "mission_complete":
+      $("summary").classList.add("show");
+      $("summary-text").textContent = ev.summary || "Mission complete";
+      break;
+    case "mission_error":
+      $("summary").classList.add("show");
+      $("summary-text").textContent = "Mission error: " + ev.error;
+      break;
+    default:
+      // bunq_webhook, balance_snapshot_error, etc — log only
+      console.log("[event]", ev.type, ev);
+  }
+}
+
+async function refreshHealth() {
+  try {
+    const r = await fetch("/health");
+    const j = await r.json();
+    const wh = j.public_url ? `<br>webhook → <code>${j.public_url.replace(/^https?:\/\//,"")}</code>` : "<br>polling-only";
+    $("user-info").innerHTML = `user_id <b>${j.user_id}</b><br>primary <code>${j.primary_id}</code>${wh}`;
+    $("start").disabled = false;
+    $("start-voice").disabled = false;
+  } catch {
+    $("user-info").textContent = "server unreachable";
+  }
+}
+
+function connectSSE() {
+  const es = new EventSource("/events");
+  es.onopen = () => {
+    $("conn").classList.add("live");
+    $("conn-label").textContent = "Live";
+  };
+  es.onerror = () => {
+    $("conn").classList.remove("live");
+    $("conn-label").textContent = "Reconnecting…";
+  };
+  es.onmessage = (e) => {
+    try { handle(JSON.parse(e.data)); }
+    catch (err) { console.warn("Bad event:", e.data); }
+  };
+}
+
+async function kickoff(path) {
+  $("start").disabled = true;
+  $("start-voice").disabled = true;
+  resetUI();
+  try {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seed_eur: 500, wait_seconds: 60 }),
+    });
+    const j = await r.json();
+    if (!j.ok) alert("Start failed: " + (j.error || "unknown"));
+  } finally {
+    setTimeout(() => {
+      $("start").disabled = false;
+      $("start-voice").disabled = false;
+    }, 5000);
+  }
+}
+
+$("start").addEventListener("click", () => kickoff("/missions/weekend/start"));
+$("start-voice").addEventListener("click", () => kickoff("/missions/weekend/start-from-voice"));
+
+refreshHealth();
+connectSSE();
+</script>
+</body>
+</html>

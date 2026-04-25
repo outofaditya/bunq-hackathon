@@ -16,6 +16,7 @@ import anthropic
 from .bunq_tools import BunqToolbox
 from .events import bus
 from .tool_catalog import BUNQ_TOOLS
+from .tts import synthesize_narration
 
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
@@ -114,6 +115,12 @@ def run_mission(
                 text = str(args.get("text", ""))[:240]
                 narrations.append(text)
                 bus.publish("narrate", {"text": text})
+                # Synthesize speech and emit a follow-up event with the audio URL.
+                try:
+                    audio_filename = synthesize_narration(text)
+                    bus.publish("narrate_audio", {"text": text, "url": f"/tts/{audio_filename}"})
+                except Exception as e:  # noqa: BLE001
+                    bus.publish("narrate_audio_error", {"text": text, "error": str(e)})
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
@@ -124,6 +131,12 @@ def run_mission(
             if name == "finish_mission":
                 final_summary = str(args.get("summary", ""))[:400]
                 bus.publish("mission_complete", {"summary": final_summary})
+                # Synthesize the closing line too.
+                try:
+                    audio_filename = synthesize_narration(final_summary)
+                    bus.publish("narrate_audio", {"text": final_summary, "url": f"/tts/{audio_filename}"})
+                except Exception as e:  # noqa: BLE001
+                    bus.publish("narrate_audio_error", {"text": final_summary, "error": str(e)})
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
