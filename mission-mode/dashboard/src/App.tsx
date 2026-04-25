@@ -134,7 +134,31 @@ export default function App() {
         break;
 
       case "options":
-        setEntries((xs) => [...xs, { kind: "options", intro: evt.intro, options: evt.options }]);
+        setEntries((xs) => [
+          ...xs,
+          {
+            kind: "options",
+            intro: evt.intro,
+            options: evt.options.map((o) => ({ ...o, image_status: "loading" as const })),
+          },
+        ]);
+        break;
+
+      case "option_image":
+        setEntries((xs) =>
+          xs.map((e) => {
+            if (e.kind !== "options") return e;
+            const idx = e.options.findIndex((o) => o.id === evt.option_id);
+            if (idx === -1) return e;
+            const next = e.options.slice();
+            next[idx] = {
+              ...next[idx],
+              image_url: evt.image_url ?? null,
+              image_status: evt.status,
+            };
+            return { ...e, options: next };
+          }),
+        );
         break;
 
       case "confirmation_request":

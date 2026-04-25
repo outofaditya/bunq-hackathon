@@ -23,7 +23,7 @@ from typing import Any
 
 from anthropic import Anthropic
 
-from . import browser_agent, bunq_tools, side_tools
+from . import browser_agent, bunq_tools, image_gen, side_tools
 from .events import bus
 from .phases import Phase
 from .sessions import Session
@@ -73,6 +73,10 @@ async def _execute_tool(session: Session, name: str, args: dict[str, Any]) -> di
         await bus.publish("options", intro=args["intro_text"], options=args["options"])
         session.phase = Phase.AWAITING_CONFIRMATION
         await bus.publish("phase", value=session.phase.value)
+        # Fire-and-forget: generate cartoon illustrations in parallel and stream
+        # them in as `option_image` events so cards aren't blocked on image gen.
+        for opt in args["options"]:
+            asyncio.create_task(_generate_and_publish_image(opt))
         return {"presented": len(args["options"])}
 
     if name == "request_confirmation":
@@ -324,3 +328,17 @@ def _is_yes(text: str) -> bool:
         return False
     positive = {"yes", "y", "go", "confirm", "do it", "ok", "okay", "sure", "yep", "yeah", "proceed", "let's go", "approve"}
     return any(t == p or t.startswith(p + " ") or p in t for p in positive)
+
+
+async def _generate_and_publish_image(opt: dict[str, Any]) -> None:
+    """Background task: generate one option's cartoon image, publish via SSE."""
+    option_id = opt.get("id", "")
+    try:
+        url = await image_gen.generate_for_option(opt)
+    except Exception as e:  # noqa: BLE001 — never break the demo
+        print(f"[agent_loop] image gen crash for {option_id}: {e}", flush=True)
+        url = None
+    if not url:
+        await bus.publish("option_image", option_id=option_id, image_url=None, status="failed")
+        return
+    await bus.publish("option_image", option_id=option_id, image_url=url, status="ok")

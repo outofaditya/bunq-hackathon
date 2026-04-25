@@ -198,6 +198,7 @@ function OptionCard({
   onSelect: () => void;
 }) {
   const hasSources = (option.sources?.length ?? 0) > 0;
+  const imgStatus = option.image_status ?? (option.image_url ? "ok" : undefined);
   return (
     <div className={`option-card ${selected ? "selected" : ""} ${disabled && !selected ? "disabled" : ""}`}>
       <button
@@ -206,6 +207,18 @@ function OptionCard({
         disabled={disabled && !selected}
         onClick={onSelect}
       >
+        <div className="option-image">
+          {option.image_url ? (
+            <img src={option.image_url} alt={option.hotel} loading="lazy" />
+          ) : imgStatus === "failed" ? (
+            <div className="option-image-fallback">🌍</div>
+          ) : (
+            <div className="option-image-skeleton">
+              <span className="option-image-shimmer" />
+              <span className="option-image-label">painting…</span>
+            </div>
+          )}
+        </div>
         <div className="option-id">{option.id.toUpperCase()}</div>
         <div className="option-hotel">{option.hotel}</div>
         <div className="option-line">🍽 {option.restaurant}</div>

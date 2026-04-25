@@ -128,6 +128,73 @@ async def debug_book_hotel(payload: dict) -> JSONResponse:
     return JSONResponse({"ok": True, **out})
 
 
+@app.post("/debug/generate-image")
+async def debug_generate_image(payload: dict) -> JSONResponse:
+    """Smoke-test the OpenRouter Seedream image-gen pipeline.
+
+    Either pass a full PackageOption-shaped object or a raw {prompt: "..."} body.
+    Returns the data URL so callers can paste it in the browser to verify
+    quality without going through the full agent loop.
+    """
+    from . import image_gen
+
+    if "prompt" in payload:
+        url = await image_gen.generate_image(payload["prompt"])
+    else:
+        url = await image_gen.generate_for_option(payload)
+    if not url:
+        return JSONResponse({"ok": False, "error": "image generation failed; see server log"}, status_code=502)
+    return JSONResponse({"ok": True, "image_url": url, "length": len(url)})
+
+
+@app.post("/debug/present-options")
+async def debug_present_options(payload: dict | None = None) -> JSONResponse:
+    """Publish a fake `options` SSE event + kick off image gen for each option.
+
+    Mirrors what the present_options tool does in agent_loop, minus the phase
+    flip. Lets the team rehearse the card grid + image fade-in pipeline
+    without spending Claude tokens on a chat turn.
+    """
+    import asyncio
+    from .agent_loop import _generate_and_publish_image
+
+    payload = payload or {}
+    options = payload.get("options") or [
+        {
+            "id": "opt-a",
+            "hotel": "Hotel V Fizeaustraat",
+            "restaurant": "De Kas",
+            "extra": "Canal sunset cruise",
+            "total_eur": 445,
+            "notes": "Calm, southeast Amsterdam, great for couples",
+            "sources": [{"label": "tripadvisor.com", "url": "https://www.tripadvisor.com"}],
+        },
+        {
+            "id": "opt-b",
+            "hotel": "Casa Cook Amsterdam",
+            "restaurant": "La Perla",
+            "extra": "Vondelpark picnic",
+            "total_eur": 480,
+            "notes": "Bohemian, central, plant-filled lobby",
+            "sources": [{"label": "casacook.com", "url": "https://casacook.com"}],
+        },
+        {
+            "id": "opt-c",
+            "hotel": "The Hoxton Lloyd",
+            "restaurant": "Restaurant Floris",
+            "extra": "Anne Frank House visit",
+            "total_eur": 510,
+            "notes": "Boutique, lively, walking distance to canals",
+            "sources": [{"label": "thehoxton.com", "url": "https://thehoxton.com"}],
+        },
+    ]
+    intro = payload.get("intro_text") or "Three weekend picks for Amsterdam:"
+    await bus.publish("options", intro=intro, options=options)
+    for opt in options:
+        asyncio.create_task(_generate_and_publish_image(opt))
+    return JSONResponse({"ok": True, "options_count": len(options)})
+
+
 @app.post("/stt")
 async def stt(audio: UploadFile = File(...)) -> JSONResponse:
     """ElevenLabs Scribe proxy. Accepts an audio blob, returns {transcript}."""
