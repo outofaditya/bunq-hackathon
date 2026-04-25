@@ -4,6 +4,8 @@
 bunq_context.json
 *.key
 *.pem
+dashboard-react/node_modules/
+dashboard-react/dist/
 
 # Python
 __pycache__/
