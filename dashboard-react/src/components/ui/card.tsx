@@ -6,10 +6,10 @@ const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElemen
     <div
       ref={ref}
       className={cn(
-        // Glass-y card surface with a soft transition. Children that want a
-        // hover state can opt in with the `hover-lift` utility.
-        "rounded-xl border border-border/80 bg-card/85 text-card-foreground backdrop-blur-sm",
-        "shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_8px_24px_-12px_rgba(0,0,0,0.45)]",
+        // bunq Press Kit panel — solid dark surface, single-pixel border,
+        // boxy radius. Subtle inset highlight keeps it from looking flat.
+        "rounded-md border border-border bg-card text-card-foreground",
+        "shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_12px_32px_rgba(0,0,0,0.55)]",
         "transition-[border-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)]",
         className,
       )}

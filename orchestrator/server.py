@@ -305,6 +305,14 @@ async def root() -> FileResponse:
     return FileResponse(str(DASHBOARD_HTML))
 
 
+@app.get("/favicon.ico")
+async def favicon() -> Any:
+    """Silence the browser's default favicon 404. We don't ship one yet so
+    a 204 No Content is the cheapest correct answer."""
+    from fastapi.responses import Response
+    return Response(status_code=204)
+
+
 # Vite emits JS/CSS chunks into dist/assets/. The /assets/* path is also
 # used by mission audio (recorded_voice_*.mp3) so we have a precedence:
 # check the React build first, fall back to the project assets dir.

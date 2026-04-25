@@ -24,14 +24,19 @@ export function MicMeter({ analyser, active }: Props) {
     const data = new Uint8Array(bins);
 
     const draw = () => {
-      analyser.getByteFrequencyData(data);
+      try {
+        analyser.getByteFrequencyData(data);
+      } catch {
+        rafRef.current = requestAnimationFrame(draw);
+        return;
+      }
       const W = canvas.width;
       const H = canvas.height;
       ctx.clearRect(0, 0, W, H);
       const slice = Math.floor(bins / 2);
       const barW = (W / slice) * 0.7;
       const gap = (W / slice) * 0.3;
-      ctx.fillStyle = "#5B8F6E";
+      ctx.fillStyle = "#FF7819";
       for (let i = 0; i < slice; i++) {
         const v = data[i] / 255;
         const h = Math.max(2, v * H * 0.95);

@@ -94,7 +94,7 @@ export function CameraDialog({ open, onCapture, onCancel, status = "idle", messa
     : "Aim at the invoice";
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onCancel(); }}>
+    <Dialog open={open} onOpenChange={(o: boolean) => { if (!o) onCancel(); }}>
       <DialogContent hideClose className="max-w-2xl p-0 overflow-hidden">
         <DialogTitle className="sr-only">Receipt scanner</DialogTitle>
 

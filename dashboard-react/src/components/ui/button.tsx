@@ -4,9 +4,9 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  // Base — every button gets the spring-y hover/active behaviour, focus ring,
-  // and an SVG sizer. Specific variants layer colour + shadow on top.
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded font-medium " +
+  // Base — Press-Kit-flat with a small lift on hover, no gradient panning,
+  // boxy radius. Springs back on active for tactile feedback.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded font-semibold " +
     "transition-[transform,background-color,box-shadow,border-color,color] duration-200 ease-[cubic-bezier(0.2,0,0,1)] " +
     "hover:-translate-y-[1px] active:translate-y-0 active:scale-[0.97] " +
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background " +
@@ -15,35 +15,35 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
+        // bunq Orange CTA — solid, white text, brightens to orange-deep on hover
         default: [
-          "text-primary-foreground",
-          "bg-[image:var(--gradient-warm)] bg-[length:200%_200%] bg-[position:0%_50%]",
-          "shadow-[0_8px_24px_-8px_rgba(255,111,143,0.4)]",
-          "hover:bg-[position:100%_50%] hover:shadow-[0_14px_34px_-8px_rgba(255,111,143,0.55)]",
+          "bg-bunq-orange text-bunq-white",
+          "shadow-[0_8px_24px_-8px_rgba(255,120,25,0.45)]",
+          "hover:bg-bunq-orange-deep hover:shadow-[0_14px_34px_-8px_rgba(255,120,25,0.65)]",
         ].join(" "),
         destructive: [
-          "bg-destructive text-destructive-foreground",
-          "shadow-[0_6px_20px_-8px_rgba(255,111,143,0.5)]",
-          "hover:bg-destructive/90 hover:shadow-[0_12px_30px_-8px_rgba(255,111,143,0.65)]",
+          "bg-bunq-red text-bunq-white",
+          "shadow-[0_6px_20px_-8px_rgba(230,50,35,0.55)]",
+          "hover:opacity-95 hover:shadow-[0_12px_30px_-8px_rgba(230,50,35,0.75)]",
         ].join(" "),
         outline: [
-          "border border-border bg-card/60 text-card-foreground backdrop-blur",
-          "hover:border-accent-coral/50 hover:bg-accent hover:shadow-[0_8px_24px_-12px_rgba(183,136,255,0.4)]",
+          "border border-border bg-card text-card-foreground",
+          "hover:border-bunq-orange/60 hover:bg-paper-850 hover:text-foreground",
         ].join(" "),
         secondary: [
-          "bg-secondary text-secondary-foreground",
-          "hover:bg-secondary/80 hover:shadow-[0_6px_18px_-10px_rgba(183,136,255,0.5)]",
+          "bg-secondary text-secondary-foreground border border-border",
+          "hover:bg-paper-850 hover:border-paper-700",
         ].join(" "),
         ghost: "text-foreground hover:bg-accent hover:text-accent-foreground",
         link: [
-          "text-primary underline-offset-4",
-          "hover:underline hover:text-accent-coral",
+          "text-bunq-orange underline-offset-4",
+          "hover:underline hover:text-bunq-orange-deep",
         ].join(" "),
+        // Kept for back-compat with the IdleMic — same as default
         glow: [
-          "text-primary-foreground",
-          "bg-[image:var(--gradient-hero)] bg-[length:300%_300%] bg-[position:0%_50%]",
-          "shadow-[0_10px_36px_-8px_rgba(183,136,255,0.55)]",
-          "hover:bg-[position:100%_50%] hover:shadow-[0_18px_44px_-8px_rgba(255,111,143,0.7)]",
+          "bg-bunq-orange text-bunq-white",
+          "shadow-[0_10px_36px_-8px_rgba(255,120,25,0.55)]",
+          "hover:bg-bunq-orange-deep hover:shadow-[0_18px_44px_-8px_rgba(255,120,25,0.7)]",
         ].join(" "),
       },
       size: {

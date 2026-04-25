@@ -73,36 +73,74 @@ export function useMicRecorder({
     cancelledRef.current = false;
     chunksRef.current = [];
 
+    // 1. Mic access. Surface a clear error on the dialog if the user denies
+    //    or the browser refuses (e.g. non-HTTPS context).
     let stream: MediaStream;
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("mic unavailable in this browser (needs HTTPS or localhost)");
+      }
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
       });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "mic unavailable";
+      const name = (e as { name?: string })?.name || "";
+      const msg =
+        name === "NotAllowedError" ? "Mic permission denied — allow it in your browser." :
+        name === "NotFoundError"   ? "No microphone found on this device." :
+        e instanceof Error          ? e.message :
+                                      "mic unavailable";
+      console.error("[mic] getUserMedia failed:", e);
       setError(msg);
       setState("error");
       return;
     }
     streamRef.current = stream;
 
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    if (ctx.state === "suspended") await ctx.resume();
-    const source = ctx.createMediaStreamSource(stream);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.6;
-    source.connect(analyser);
-    ctxRef.current = ctx;
-    analyserRef.current = analyser;
-    vadBufferRef.current = new Uint8Array(analyser.fftSize);
+    // 2. Optional audio analysis graph (used for the meter + VAD). If the
+    //    AudioContext fails for any reason, recording itself still works —
+    //    we just lose VAD + the mic's voice-reactive visuals. Don't let
+    //    audio-graph failure abort the whole recording.
+    let analyser: AnalyserNode | null = null;
+    try {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) throw new Error("AudioContext unsupported");
+      const ctx = new Ctx();
+      if (ctx.state === "suspended") await ctx.resume();
+      const source = ctx.createMediaStreamSource(stream);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.6;
+      source.connect(analyser);
+      ctxRef.current = ctx;
+      analyserRef.current = analyser;
+      vadBufferRef.current = new Uint8Array(analyser.fftSize);
+    } catch (e) {
+      console.warn("[mic] audio graph setup failed; recording will still work:", e);
+      ctxRef.current = null;
+      analyserRef.current = null;
+      vadBufferRef.current = null;
+    }
 
+    // 3. MediaRecorder. If construction fails, fall through to error state.
     const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
     let mimeType = "";
     for (const m of mimeCandidates) {
       if (MediaRecorder.isTypeSupported(m)) { mimeType = m; break; }
     }
-    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    let recorder: MediaRecorder;
+    try {
+      recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "MediaRecorder unsupported";
+      console.error("[mic] MediaRecorder failed:", e);
+      setError(msg);
+      setState("error");
+      // Clean up the open audio graph + tracks so we don't leak.
+      try { ctxRef.current?.close(); } catch { /* ignore */ }
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
     recorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
     };
@@ -116,22 +154,28 @@ export function useMicRecorder({
     lastVoiceMsRef.current = null;
     speechSeenRef.current = false;
 
-    // Elapsed-time timer (also enforces maxDuration as a hard upper bound).
+    // 4. Elapsed-time timer (also enforces maxDuration as a hard upper bound).
     timerRef.current = setInterval(() => {
       const elapsed = (performance.now() - startedRef.current) / 1000;
       setSeconds(elapsed);
       if (elapsed >= maxDurationSec) stop();
     }, 100);
 
-    // Voice activity detection — silence-based auto-stop.
-    if (autoStopSilenceMs > 0) {
+    // 5. Voice activity detection — silence-based auto-stop. Only runs if
+    //    the analyser exists (audio graph setup succeeded) AND VAD is enabled.
+    if (autoStopSilenceMs > 0 && analyser) {
       vadTimerRef.current = setInterval(() => {
         const a = analyserRef.current;
         const buf = vadBufferRef.current;
         if (!a || !buf) return;
-        // Cast: getByteTimeDomainData wants `Uint8Array<ArrayBuffer>` specifically; our buffer
-        // satisfies it but TS widens to `ArrayBufferLike` through the ref.
-        a.getByteTimeDomainData(buf as unknown as Uint8Array<ArrayBuffer>);
+        try {
+          // Wrap in try/catch — calling on a closed/disconnected analyser
+          // can throw `InvalidStateError`. Just skip that tick rather than
+          // spamming the console or breaking the VAD loop.
+          a.getByteTimeDomainData(buf as unknown as Uint8Array<ArrayBuffer>);
+        } catch {
+          return;
+        }
 
         // RMS on a -1..1 normalised window.
         let sum = 0;
@@ -148,20 +192,15 @@ export function useMicRecorder({
         if (sinceStart < vadWarmupMs) return;
 
         if (rms > silenceThreshold) {
-          // Voice detected — refresh the silence clock.
           speechSeenRef.current = true;
           lastVoiceMsRef.current = now;
           return;
         }
 
-        // Below threshold = silence. Only count once we've actually heard
-        // some speech, so a long pause before the user begins doesn't trigger.
         if (!speechSeenRef.current) return;
         if (lastVoiceMsRef.current === null) return;
 
         if (now - lastVoiceMsRef.current >= autoStopSilenceMs) {
-          // Auto-stop. Clear the VAD timer immediately so we don't fire twice
-          // while the recorder is winding down.
           if (vadTimerRef.current) {
             clearInterval(vadTimerRef.current);
             vadTimerRef.current = null;

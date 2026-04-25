@@ -213,14 +213,23 @@ export function App() {
     }
   }, []);
 
-  const onMicClick = useCallback(async () => {
+  const onMicClick = useCallback(() => {
+    // CRITICAL: Safari (and iOS WKWebView) requires `getUserMedia()` to be
+    // called inside the same task as the user gesture. If we `await` ANYTHING
+    // between the click handler and `mic.start()`, Safari loses the gesture
+    // context and rejects the permission request automatically with
+    // NotAllowedError — even if the user has previously granted access.
+    //
+    // So we kick `mic.start()` first (synchronous → first internal await is
+    // getUserMedia itself, which is allowed) and fire-and-forget the opening
+    // greeting fetch. The greeting plays once the mic is already live;
+    // ordering doesn't matter for UX, but it does for the permission grant.
     setMicOpen(true);
-    try {
-      const r = await fetch("/tts/opening", { method: "POST" });
-      const j = await r.json();
-      if (j.ok && j.url) audioQueue.enqueue(j.url);
-    } catch { /* ignore */ }
     void mic.start();
+    fetch("/tts/opening", { method: "POST" })
+      .then((r) => r.json())
+      .then((j) => { if (j.ok && j.url) audioQueue.enqueue(j.url); })
+      .catch(() => { /* ignore — non-essential */ });
   }, [mic]);
 
   const onMicCancel = useCallback(() => { mic.cancel(); setMicOpen(false); }, [mic]);
@@ -461,33 +470,40 @@ export function App() {
 
   return (
     <MotionConfig transition={{ duration: 0.32, ease: PUNCTUAL_EASE }}>
-      <div className="h-dvh grid grid-rows-[56px_1fr_auto] bg-background text-foreground overflow-hidden">
+      {/* `pb-[6px]` reserves room for the fixed rainbow strip device */}
+      <div className="h-dvh grid grid-rows-[56px_1fr_auto] bg-background text-foreground overflow-hidden pb-[6px]">
 
-        {/* Header */}
-        <header className="flex items-center gap-3 px-6 border-b border-border/70 bg-background/80 backdrop-blur">
-          <span className="w-6 h-6 rounded-md bg-punctual/15 grid place-items-center">
-            <Sparkles className="w-3.5 h-3.5 text-punctual" />
-          </span>
-          <span className="text-foreground font-medium tracking-tight">Mission Mode</span>
+        {/* Header — lowercase "bunq" wordmark per Press Kit */}
+        <header className="flex items-center gap-3 px-6 border-b border-border bg-background">
+          <div className="flex items-center gap-3">
+            <span className="text-[24px] font-extrabold tracking-[-0.04em] leading-none text-foreground">bunq</span>
+            <span className="block w-px h-[22px] bg-paper-700" />
+            <div className="flex flex-col gap-[2px] leading-none">
+              <span className="font-bold text-body tracking-[0.01em]">Mission Mode</span>
+              <span className="label-uc text-paper-500">Voice-driven banking</span>
+            </div>
+          </div>
           <div className="flex-1" />
 
           <AnimatePresence>
             {balance !== null && (
               <motion.div
                 {...FADE_UP}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-card border border-border/80"
+                className="flex items-baseline gap-2 px-3 py-[6px] rounded-md bg-popover border border-paper-700"
               >
-                <span className="label-uc text-muted-foreground">Balance</span>
-                <AnimatedNumber value={balance} format={fmtEur} className="text-meta tabular text-foreground font-medium" />
+                <span className="label-uc text-paper-500">Balance</span>
+                <AnimatedNumber value={balance} format={fmtEur} className="text-body tabular font-bold text-bunq-orange" />
               </motion.div>
             )}
           </AnimatePresence>
 
           <div className={cn(
-            "flex items-center gap-2 px-3 py-1.5 rounded-full",
-            status === "live" ? "text-status-complete" : "text-muted-foreground",
+            "inline-flex items-center gap-[6px] px-[10px] py-[5px] rounded-full border transition-colors",
+            status === "live" ? "text-bunq-green border-bunq-green/45" :
+            status === "reconnecting" ? "text-bunq-yellow border-bunq-yellow/45 animate-pulse" :
+            "text-paper-500 border-paper-700",
           )}>
-            {status === "live" ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+            {status === "live" ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
             <span className="label-uc">{status === "live" ? "Live" : status === "reconnecting" ? "Reconnecting" : "Connecting"}</span>
           </div>
         </header>
@@ -740,14 +756,13 @@ export function App() {
           </div>
         </main>
 
-        {/* Narration footer — fixed height, never scrolls */}
+        {/* Narration footer — fixed height, never scrolls. Only renders the
+            current narration line; collapses to a thin spacer when quiet. */}
         <div className="h-12 border-t border-border/70 bg-background/80 backdrop-blur flex items-center px-6">
           <div className="flex items-center gap-3 max-w-3xl mx-auto w-full">
-            <span className={cn(
-              "inline-block w-2 h-2 rounded-full",
-              narration ? "bg-status-complete animate-pulse" : "bg-muted",
-            )} />
-            <span className="label-uc text-muted-foreground">Voice</span>
+            {narration && (
+              <span className="inline-block w-2 h-2 rounded-full bg-status-complete animate-pulse shrink-0" />
+            )}
             <AnimatePresence mode="wait">
               {narration && (
                 <motion.span
@@ -822,6 +837,8 @@ export function App() {
           analyser={mic.analyser.current}
           onStop={mic.stop}
           onCancel={onMicCancel}
+          error={mic.error}
+          onRetry={() => void mic.start()}
         />
 
         <MicDialog
@@ -831,6 +848,8 @@ export function App() {
           analyser={donationMic.analyser.current}
           onStop={donationMic.stop}
           onCancel={onDonateCancel}
+          error={donationMic.error}
+          onRetry={() => void donationMic.start()}
         />
 
         <MicDialog
@@ -840,6 +859,8 @@ export function App() {
           analyser={taxMic.analyser.current}
           onStop={taxMic.stop}
           onCancel={onTaxConfirmCancel}
+          error={taxMic.error}
+          onRetry={() => void taxMic.start()}
         />
 
         <CameraDialog
@@ -849,6 +870,10 @@ export function App() {
           status={taxScanState}
           message={taxScanMessage}
         />
+
+        {/* bunq brand mark — full-bleed rainbow strip along the bottom edge.
+            Pure brand device, never tinted, never repositioned. */}
+        <div className="rainbow-strip" aria-hidden />
       </div>
     </MotionConfig>
   );
@@ -858,26 +883,13 @@ export function App() {
 function IdleMic({ onStart, disabled }: { onStart: () => void; disabled?: boolean }) {
   return (
     <div className="relative flex flex-col items-center">
-      {/* Layered colour aurora — coral, violet, sky in a soft tri-radial wash */}
+      {/* Single soft bunq-orange halo behind the button. No conic ring —
+          the masked rainbow looked jittery against the black bg. */}
       <div
-        className="pointer-events-none absolute inset-0 -m-40 rounded-full opacity-60 blur-3xl"
+        className="pointer-events-none absolute inset-0 -m-40 rounded-full opacity-55 blur-3xl"
         style={{
           background:
-            "radial-gradient(circle at 30% 30%, rgba(255,111,143,0.35) 0%, transparent 55%)," +
-            "radial-gradient(circle at 70% 35%, rgba(183,136,255,0.30) 0%, transparent 55%)," +
-            "radial-gradient(circle at 50% 80%, rgba(105,179,255,0.30) 0%, transparent 55%)",
-        }}
-      />
-      {/* Slow-rotating gradient ring underneath the button */}
-      <div
-        className="pointer-events-none absolute -inset-6 rounded-full opacity-90"
-        style={{
-          background:
-            "conic-gradient(from 0deg, var(--color-accent-coral), var(--color-accent-violet), var(--color-accent-sky), var(--color-accent-mint), var(--color-accent-coral))",
-          mask: "radial-gradient(circle, transparent 56%, black 60%, black 70%, transparent 73%)",
-          WebkitMask: "radial-gradient(circle, transparent 56%, black 60%, black 70%, transparent 73%)",
-          animation: "gradientSpin 12s linear infinite",
-          filter: "blur(0.5px)",
+            "radial-gradient(circle at 50% 50%, rgba(255,120,25,0.55) 0%, rgba(250,170,0,0.22) 36%, transparent 62%)",
         }}
       />
 
@@ -886,21 +898,21 @@ function IdleMic({ onStart, disabled }: { onStart: () => void; disabled?: boolea
         transition={{ duration: 3.4, ease: "easeInOut", repeat: Infinity }}
         className="relative"
       >
-        <span className="absolute inset-0 -m-3 rounded-full border border-accent-coral/30 animate-ping [animation-duration:3s]" />
-        <span className="absolute inset-0 -m-2 rounded-full border border-accent-violet/40 animate-ping [animation-duration:4s] [animation-delay:1.5s]" />
+        <span className="absolute inset-0 -m-3 rounded-full border border-bunq-orange/30 animate-ping [animation-duration:3s]" />
+        <span className="absolute inset-0 -m-2 rounded-full border border-bunq-orange-deep/40 animate-ping [animation-duration:4s] [animation-delay:1.5s]" />
         <Button
-          variant="glow"
+          variant="default"
           size="xl"
           onClick={onStart}
           disabled={disabled}
-          className="relative w-28 h-28 shadow-[0_0_0_1px_rgba(255,255,255,0.10),0_24px_48px_-12px_rgba(255,111,143,0.5)]"
+          className="relative w-28 h-28 shadow-[0_0_0_1px_rgba(255,255,255,0.08),0_24px_48px_-12px_rgba(255,120,25,0.55)]"
         >
           <Mic className="w-10 h-10" />
         </Button>
       </motion.div>
 
-      <h1 className="text-title-lg mt-9 mb-1.5 gradient-text font-semibold">Tap to talk</h1>
-      <p className="text-body text-muted-foreground mb-7">Speak the mission like you'd say it to a friend.</p>
+      <h1 className="text-title-lg mt-9 mb-1.5 font-extrabold tracking-[-0.02em] text-foreground">Tap to talk</h1>
+      <p className="text-body text-paper-400 mb-7">Speak the mission like you'd say it to a friend.</p>
 
       <div className="flex flex-col items-center gap-1">
         {[
@@ -913,8 +925,8 @@ function IdleMic({ onStart, disabled }: { onStart: () => void; disabled?: boolea
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.15 + i * 0.08, duration: 0.32, ease: PUNCTUAL_EASE }}
-            whileHover={{ y: -2, color: "rgb(255 111 143)" }}
-            className="text-meta text-paper-400 italic cursor-default transition-colors"
+            whileHover={{ y: -2, color: "rgb(255 120 25)" }}
+            className="text-meta text-paper-500 italic cursor-default transition-colors"
           >
             “{s}”
           </motion.span>

@@ -1,83 +1,124 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/* Tailwind v4 — Punctual design tokens via @theme. See /Users/outofaditya/Desktop/punctual-design-system.md */
+/* ============================================================
+   bunq Press Kit theme (lifted from trip-agent-mission-mode)
+   ============================================================
+   - Primary background: Deep Black (#000000) with white text
+   - Brand accent: bunq Orange #FF7819
+   - Status colours mapped to brand palette (Green/Yellow/Red/Blue)
+   - Typography: Montserrat (ExtraBold + Medium / SemiBold + Regular)
+   - Rainbow palette appears only as a standalone strip device
+     (`.rainbow-strip` at the bottom of the viewport).
+   ============================================================ */
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  /* Punctual paper ramp (dark-mode tuned values from §1.2) */
-  --color-paper-50:  #FAFAF9;
-  --color-paper-100: #F4F3F0;
-  --color-paper-200: #EDEBE5;
-  --color-paper-300: #C5C2BB;
-  --color-paper-400: #98958E;
-  --color-paper-500: #68655F;
-  --color-paper-600: #3A3A38;
-  --color-paper-700: #2A2A28;
-  --color-paper-800: #1E1E1C;
-  --color-paper-850: #161614;
-  --color-paper-900: #0E0E0D;
-  --color-paper-950: #0A0A08;
+  /* === bunq Press Kit palette ============================== */
+  --color-bunq-orange:       #FF7819;
+  --color-bunq-orange-deep:  #FAAA00;
+  --color-bunq-yellow:       #FAC800;
+  --color-bunq-red:          #E63223;
+  --color-bunq-pink:         #FF2D55;
+  --color-bunq-fuschia:      #E33095;
+  --color-bunq-purple:       #C834D6;
+  --color-bunq-deep-purple:  #A22FB6;
+  --color-bunq-indigo:       #4B287D;
+  --color-bunq-deep-blue:    #2850AF;
+  --color-bunq-blue:         #0080FF;
+  --color-bunq-light-blue:   #47BFFF;
+  --color-bunq-turquoise:    #26C7C3;
+  --color-bunq-cyan:         #2DE0C7;
+  --color-bunq-green:        #34CC8D;
+  --color-bunq-deep-green:   #329146;
+  --color-bunq-black:        #000000;
+  --color-bunq-white:        #FFFFFF;
 
-  /* Punctual brand — bumped saturation, kept the muted base */
-  --color-ink:      #14130F;
-  --color-stone:    #6E6C66;
-  --color-punctual: #6E7DDC;            /* lifted from muted blue-gray to indigo */
+  /* === Surface ramp (paper-* kept for back-compat) ========= */
+  --color-paper-50:  #FFFFFF;
+  --color-paper-100: #F2F2F2;
+  --color-paper-200: #DDDDDD;
+  --color-paper-300: #C5C5C5;
+  --color-paper-400: #9aa0a6;
+  --color-paper-500: #6b6f76;
+  --color-paper-600: #4a4a4a;
+  --color-paper-700: #333333;
+  --color-paper-800: #262626;
+  --color-paper-850: #1d1d1d;
+  --color-paper-900: #161614;
+  --color-paper-950: #0d0d0d;
 
-  /* Vibrant accent set — used sparingly for highlights, hover glows, and gradients */
-  --color-accent-coral:    #FF6F8F;     /* hot coral / pink for primary calls-to-action */
-  --color-accent-mint:     #4FE3C1;     /* turquoise for "live" / scanning indicators */
-  --color-accent-amber:    #FFB453;     /* warm amber for sustainability / money-positive */
-  --color-accent-violet:   #B788FF;     /* lavender for AI-generated / vision callouts */
-  --color-accent-sky:      #69B3FF;     /* sky-blue for browser-agent / source links */
+  /* === Punctual brand aliases (legacy refs) ================ */
+  --color-ink:      #000000;
+  --color-stone:    #6b6f76;
+  --color-punctual: #FF7819;            /* mapped to bunq orange */
 
-  /* Composite gradients (CSS strings, used via background-image) */
-  --gradient-hero:   linear-gradient(135deg, #FF6F8F 0%, #B788FF 50%, #6E7DDC 100%);
-  --gradient-warm:   linear-gradient(135deg, #FFB453 0%, #FF6F8F 100%);
-  --gradient-cool:   linear-gradient(135deg, #4FE3C1 0%, #69B3FF 100%);
+  /* === Accent aliases — point legacy names at bunq palette so
+         existing classNames keep working without churn ====== */
+  --color-accent-coral:  #FF7819;       /* coral → bunq orange  */
+  --color-accent-mint:   #34CC8D;       /* mint  → bunq green   */
+  --color-accent-amber:  #FAC800;       /* amber → bunq yellow  */
+  --color-accent-violet: #C834D6;       /* violet→ bunq purple  */
+  --color-accent-sky:    #0080FF;       /* sky   → bunq blue    */
+
+  /* === Status (dots, never backgrounds — except phase pills) */
+  --color-status-complete:  #34CC8D;
+  --color-status-upcoming:  #FAC800;
+  --color-status-overdue:   #E63223;
+  --color-status-scheduled: #0080FF;
+  --color-status-project:   #C834D6;
+  --color-status-priority:  #FF7819;
+
+  /* === Gradient utilities — minimal, on-brand ============== */
+  --gradient-hero:   linear-gradient(135deg, #FF7819 0%, #FAAA00 100%);
+  --gradient-warm:   linear-gradient(135deg, #FF7819 0%, #FAC800 100%);
+  --gradient-cool:   linear-gradient(135deg, #0080FF 0%, #34CC8D 100%);
   --gradient-glass:  linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0) 100%);
 
-  /* Punctual semantic status — bumped slightly more saturated for legibility on dark */
-  --color-status-complete:  #5BCB8F;
-  --color-status-upcoming:  #FFB453;
-  --color-status-overdue:   #FF6F8F;
-  --color-status-scheduled: #69B3FF;
-  --color-status-project:   #B788FF;
-  --color-status-priority:  #FF8A5C;
+  /* The bunq rainbow strip — a brand DEVICE. Only used full-bleed,
+     never recoloured or remixed. */
+  --gradient-rainbow: linear-gradient(
+    90deg,
+    #329146 0%, #34CC8D 8%, #8ACB2A 16%, #C5D62A 22%,
+    #26C7C3 30%, #2DA3FF 38%, #2850AF 46%, #4B287D 54%,
+    #C834D6 62%, #E33095 70%, #E63223 78%, #FF7819 86%,
+    #FAAA00 92%, #FAC800 100%
+  );
 
-  /* ShadCN semantic contract — re-mapped through Punctual + accents */
-  --color-background:           #0A0913;
-  --color-foreground:           #F2EFE8;
-  --color-card:                 #14121F;
-  --color-card-foreground:      #F2EFE8;
-  --color-popover:              #1B1929;
-  --color-popover-foreground:   #F2EFE8;
-  --color-primary:              #FF6F8F;            /* coral CTA */
-  --color-primary-foreground:   #14121F;
-  --color-secondary:            #1B1929;
-  --color-secondary-foreground: #F2EFE8;
-  --color-muted:                #1B1929;
-  --color-muted-foreground:     #8E89A6;
-  --color-accent:               #1B1929;
-  --color-accent-foreground:    #F2EFE8;
-  --color-destructive:          #FF6F8F;
-  --color-destructive-foreground: #14121F;
-  --color-border:               #2A2638;
-  --color-input:                #2A2638;
-  --color-ring:                 #B788FF;
+  /* === ShadCN semantic contract — re-mapped through bunq === */
+  --color-background:           #000000;
+  --color-foreground:           #FFFFFF;
+  --color-card:                 #0d0d0d;
+  --color-card-foreground:      #FFFFFF;
+  --color-popover:              #161616;
+  --color-popover-foreground:   #FFFFFF;
+  --color-primary:              #FF7819;             /* bunq orange CTA */
+  --color-primary-foreground:   #FFFFFF;
+  --color-secondary:            #161616;
+  --color-secondary-foreground: #FFFFFF;
+  --color-muted:                #161616;
+  --color-muted-foreground:     #9aa0a6;
+  --color-accent:               #1d1d1d;
+  --color-accent-foreground:    #FFFFFF;
+  --color-destructive:          #E63223;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border:               #262626;
+  --color-input:                #262626;
+  --color-ring:                 #FF7819;
 
-  /* Typography */
-  --font-sans:  ui-sans-serif, "SF Pro Text", "Inter", system-ui, sans-serif;
-  --font-mono:  ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+  /* === Typography — Montserrat per bunq Press Kit ========== */
+  --font-sans:  "Montserrat", -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+  --font-mono:  "SF Mono", ui-monospace, Menlo, "JetBrains Mono", monospace;
   --font-serif: ui-serif, "New York", "Source Serif Pro", "Georgia", serif;
 
   --text-meta:    11px;
   --text-meta--line-height: 1.4;
   --text-label:   10px;
   --text-label--line-height: 1.3;
-  --text-label--letter-spacing: 0.12em;
-  --text-body:    13.5px;
+  --text-label--letter-spacing: 0.14em;
+  --text-body:    14px;
   --text-body--line-height: 1.5;
   --text-title:   20px;
   --text-title--line-height: 1.3;
@@ -89,14 +130,14 @@
   --text-display--line-height: 1.1;
   --text-display--letter-spacing: -0.02em;
 
-  /* Radius */
-  --radius-sm: 4px;
+  /* === Radii — boxy press-kit feel ========================= */
+  --radius-sm: 3px;
   --radius:    6px;
   --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-lg: 10px;
   --radius-xl: 14px;
 
-  /* Motion */
+  /* === Motion ============================================= */
   --duration-quick:   100ms;
   --duration-default: 180ms;
   --duration-slow:    260ms;
@@ -104,26 +145,32 @@
 }
 
 @layer base {
-  html, body { font-family: var(--font-sans); }
-  body {
-    font-size: 13.5px; line-height: 1.5; -webkit-font-smoothing: antialiased;
-    /* Subtle gradient field — softens the flat dark base without competing with cards. */
-    background:
-      radial-gradient(ellipse 80% 60% at 0% 0%,    rgba(183, 136, 255, 0.10) 0%, transparent 55%),
-      radial-gradient(ellipse 70% 60% at 100% 0%,  rgba(255, 111, 143, 0.08) 0%, transparent 55%),
-      radial-gradient(ellipse 90% 70% at 50% 110%, rgba(105, 179, 255, 0.07) 0%, transparent 55%),
-      var(--color-background);
-    background-attachment: fixed;
+  html, body {
+    font-family: var(--font-sans);
+    font-weight: 400;
   }
-  ::selection { background: var(--color-accent-coral); color: #fff; }
+  body {
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    background: var(--color-background);
+    color: var(--color-foreground);
+  }
+  ::selection { background: var(--color-bunq-orange); color: #fff; }
 
   *::-webkit-scrollbar { width: 8px; height: 8px; }
-  *::-webkit-scrollbar-thumb { background: var(--color-paper-700); border-radius: 9999px; transition: background 200ms; }
-  *::-webkit-scrollbar-thumb:hover { background: var(--color-accent-coral); }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-paper-800);
+    border-radius: 9999px;
+    transition: background 200ms;
+  }
+  *::-webkit-scrollbar-thumb:hover { background: var(--color-bunq-orange); }
   *::-webkit-scrollbar-track { background: transparent; }
 }
 
-/* === Animations === */
+/* === Animations ============================================ */
 
 /* Camera scan-line animation for the receipt scanner overlay */
 @keyframes scanline {
@@ -136,7 +183,7 @@
   100% { top: 0%;   opacity: 0.95; }
 }
 
-/* Slow rotating gradient — used on the idle mic halo and other hero elements */
+/* Slow pulse used on the idle mic halo */
 @keyframes gradientSpin {
   0%   { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
@@ -154,34 +201,53 @@
   100% { background-position:  200% 0; }
 }
 
-/* === Reusable utilities === */
+/* === Utility primitives ==================================== */
 
 @utility hover-lift {
-  transition: transform 220ms var(--ease-punctual), box-shadow 220ms var(--ease-punctual), border-color 220ms var(--ease-punctual);
+  transition: transform 220ms var(--ease-punctual),
+              box-shadow 220ms var(--ease-punctual),
+              border-color 220ms var(--ease-punctual);
 }
 @utility hover-lift {
   &:hover {
-    transform: translateY(-2px) scale(1.012);
-    box-shadow: 0 14px 36px -8px rgba(255, 111, 143, 0.18), 0 2px 0 rgba(255,255,255,0.04) inset;
+    transform: translateY(-2px);
+    box-shadow: 0 14px 36px -8px rgba(255, 120, 25, 0.18),
+                0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    border-color: rgba(255, 120, 25, 0.45);
   }
 }
 
-@utility hover-glow-coral {
-  transition: box-shadow 220ms var(--ease-punctual), transform 220ms var(--ease-punctual);
+@utility hover-glow-orange {
+  transition: box-shadow 220ms var(--ease-punctual),
+              transform 220ms var(--ease-punctual);
 }
-@utility hover-glow-coral {
+@utility hover-glow-orange {
   &:hover {
-    box-shadow: 0 0 0 1px rgba(255, 111, 143, 0.35), 0 16px 40px -10px rgba(255, 111, 143, 0.45);
+    box-shadow: 0 0 0 1px rgba(255, 120, 25, 0.35),
+                0 16px 40px -10px rgba(255, 120, 25, 0.45);
     transform: translateY(-2px);
   }
 }
-
+/* Legacy alias kept for back-compat */
+@utility hover-glow-coral {
+  transition: box-shadow 220ms var(--ease-punctual),
+              transform 220ms var(--ease-punctual);
+}
+@utility hover-glow-coral {
+  &:hover {
+    box-shadow: 0 0 0 1px rgba(255, 120, 25, 0.35),
+                0 16px 40px -10px rgba(255, 120, 25, 0.45);
+    transform: translateY(-2px);
+  }
+}
 @utility hover-glow-violet {
-  transition: box-shadow 220ms var(--ease-punctual), transform 220ms var(--ease-punctual);
+  transition: box-shadow 220ms var(--ease-punctual),
+              transform 220ms var(--ease-punctual);
 }
 @utility hover-glow-violet {
   &:hover {
-    box-shadow: 0 0 0 1px rgba(183, 136, 255, 0.35), 0 16px 40px -10px rgba(183, 136, 255, 0.45);
+    box-shadow: 0 0 0 1px rgba(200, 52, 214, 0.35),
+                0 16px 40px -10px rgba(200, 52, 214, 0.45);
     transform: translateY(-2px);
   }
 }
@@ -190,8 +256,31 @@
   transition: transform 200ms var(--ease-punctual);
 }
 @utility hover-zoom {
-  &:hover { transform: scale(1.06); }
+  &:hover  { transform: scale(1.06); }
   &:active { transform: scale(0.97); }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility label-uc {
+  font-family: "Montserrat", -apple-system, system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 10px;
+  line-height: 1.3;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+@utility kbd {
+  font: 500 11px/1.3 "SF Mono", ui-monospace, monospace;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--color-paper-800);
+  border: 1px solid var(--color-paper-700);
+  color: var(--color-paper-300);
+  display: inline-block;
 }
 
 @utility gradient-text {
@@ -203,26 +292,31 @@
 }
 
 @utility glass {
-  background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%);
-  backdrop-filter: blur(12px) saturate(140%);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
-  border: 1px solid rgba(255,255,255,0.06);
+  background: var(--color-paper-950);
+  border: 1px solid var(--color-border);
 }
 
-@utility tabular {
-  font-variant-numeric: tabular-nums;
+/* The full-bleed bunq rainbow strip device — used as a brand mark
+   along the bottom of the viewport. Never tinted, never repositioned. */
+@utility rainbow-strip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 6px;
+  background: var(--gradient-rainbow);
+  z-index: 100;
+  pointer-events: none;
 }
-@utility label-uc {
-  font: 500 10px/1.3 ui-sans-serif, system-ui, sans-serif;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-@utility kbd {
-  font: 500 11px/1.3 ui-monospace, monospace;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--color-paper-800);
-  border: 1px solid var(--color-paper-700);
-  color: var(--color-paper-300);
+
+/* Press-kit highlight: white text on a solid bunq-orange block.
+   Used for the brand wordmark hover and key-call accents. */
+@utility kit-highlight {
   display: inline-block;
+  padding: 4px 10px;
+  background: var(--color-bunq-orange);
+  color: var(--color-bunq-white);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border-radius: 3px;
 }
