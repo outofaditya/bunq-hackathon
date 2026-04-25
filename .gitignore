@@ -8,7 +8,7 @@ google_oauth_client.json
 
 # React / Vite
 dashboard-react/node_modules/
-dashboard-react/dist/
+# dashboard-react/dist/
 
 # Runtime artefacts
 assets/tts_cache/
