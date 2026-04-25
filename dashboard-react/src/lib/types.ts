@@ -45,6 +45,14 @@ export type EventType =
   | "user_confirmation_received"
   | "user_confirmation"
   | "user_confirmation_timeout"
+  // Trip mission (interactive chat + option cards + cartoon images)
+  | "user_message"
+  | "agent_message"
+  | "options"
+  | "option_image"
+  | "confirmation_request"
+  | "search_results"
+  | "trip_phase"
   | string;
 
 export interface Persona {
@@ -107,6 +115,48 @@ export interface CascadeRow {
   state: "running" | "complete" | "pending" | "error";
   ids?: string;
 }
+
+// =================== Trip mission ===================
+
+export interface PackageSource {
+  label: string;
+  url: string;
+}
+
+export interface PackageOption {
+  id: string;
+  hotel: string;
+  restaurant: string;
+  extra: string;
+  total_eur: number;
+  notes: string;
+  sources?: PackageSource[];
+  image_url?: string | null;
+  image_status?: "loading" | "ok" | "failed";
+}
+
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+export interface SearchGroup {
+  query: string;
+  results: SearchResult[];
+}
+
+export type TripPhase =
+  | "UNDERSTANDING"
+  | "AWAITING_CONFIRMATION"
+  | "EXECUTING"
+  | "DONE";
+
+export type TripChatEntry =
+  | { kind: "user"; text: string }
+  | { kind: "agent"; text: string }
+  | { kind: "options"; intro: string; options: PackageOption[]; selected?: string }
+  | { kind: "confirmation"; summary: string; answered?: boolean };
 
 export interface HealthInfo {
   ok: boolean;

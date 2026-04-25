@@ -399,3 +399,233 @@ def run_mission(
         "primary_id": toolbox.primary_id,
         "primary_iban": toolbox.primary_iban,
     }
+
+
+# ============================================================================
+# Trip mission — multi-turn interactive runner.
+#
+# Unlike `run_mission` (single-shot cascade), the trip mission alternates
+# between agent and user. Each call to `run_trip_turn` runs ONE conversational
+# turn, possibly including many tool calls, then returns control so the user
+# can reply via the chat panel. State is stored in TripSession.
+# ============================================================================
+
+from . import image_gen
+from .browser_agent import search_trip_options
+from .missions import MISSIONS
+from .sessions import (
+    PHASE_AWAITING_CONFIRMATION,
+    PHASE_DONE,
+    PHASE_EXECUTING,
+    PHASE_UNDERSTANDING,
+    TripSession,
+    get_or_create as get_session,
+)
+from .tool_catalog import trip_tools_for_phase
+
+
+_TRIP_YES_WORDS = {
+    "yes", "y", "go", "confirm", "do it", "ok", "okay", "sure", "yep",
+    "yeah", "proceed", "let's go", "approve", "lets go", "send it",
+}
+
+
+def _is_trip_yes(text: str) -> bool:
+    t = (text or "").strip().lower().rstrip(".!?,")
+    if not t:
+        return False
+    return any(t == w or t.startswith(w + " ") or t.endswith(" " + w) for w in _TRIP_YES_WORDS)
+
+
+async def _trip_dispatch(session: TripSession, toolbox: BunqToolbox, name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Run one tool call for the trip mission. Publishes step events itself
+    where needed (BunqToolbox methods publish their own; UI tools publish
+    their own custom events here)."""
+
+    # ---- UNDERSTAND-phase tools (UI publishers) ----
+    if name == "search_trip_options":
+        result = await search_trip_options(
+            query=str(args.get("query", "")),
+            max_results=int(args.get("max_results", 6)),
+        )
+        return result
+
+    if name == "present_options":
+        intro = str(args.get("intro_text", ""))[:240]
+        options = list(args.get("options") or [])
+        bus.publish("options", {"intro": intro, "options": options})
+        # Kick off cartoon-image generation in the background; cards render
+        # immediately with a skeleton, images stream in via option_image events.
+        for opt in options:
+            asyncio.create_task(_trip_generate_option_image(opt))
+        # Auto-flip phase: present_options happens once, after which we're
+        # waiting for the user to pick + confirm.
+        session.phase = PHASE_AWAITING_CONFIRMATION
+        bus.publish("trip_phase", {"value": session.phase})
+        return {"presented": len(options)}
+
+    if name == "request_confirmation":
+        summary = str(args.get("summary", ""))[:400]
+        bus.publish("confirmation_request", {"summary": summary})
+        return {"awaiting_user_yes": True}
+
+    # ---- EXECUTE-phase tools — mostly delegate to BunqToolbox or shared dispatch ----
+    if name == "create_sub_account":
+        result = await asyncio.to_thread(
+            toolbox.create_sub_account,
+            str(args.get("name", "Trip")),
+            float(args.get("goal_eur", 500)),
+        )
+        session.sub_account_id = result.get("account_id")
+        session.sub_account_iban = result.get("iban")
+        return result
+
+    if name == "fund_sub_account":
+        if not session.sub_account_iban:
+            return {"error": "fund_sub_account called before create_sub_account"}
+        result = await asyncio.to_thread(
+            toolbox.fund_sub_account,
+            float(args.get("amount_eur", 0)),
+            session.sub_account_iban,
+        )
+        return result
+
+    if name == "narrate":
+        text = str(args.get("text", ""))[:240]
+        bus.publish("narrate", {"text": text})
+        try:
+            audio_filename = synthesize_narration(text)
+            bus.publish("narrate_audio", {"text": text, "url": f"/tts/{audio_filename}"})
+        except Exception as e:  # noqa: BLE001
+            bus.publish("narrate_audio_error", {"text": text, "error": str(e)})
+        return {"ok": True}
+
+    if name == "finish_mission":
+        summary = str(args.get("summary", ""))[:400]
+        bus.publish("mission_complete", {"summary": summary})
+        session.phase = PHASE_DONE
+        bus.publish("trip_phase", {"value": session.phase})
+        return {"ok": True}
+
+    if name in ("book_hotel", "book_restaurant", "subscribe_to_service"):
+        # Browser-vision dispatch reuses the existing helper.
+        return await asyncio.to_thread(_dispatch_browser, name, args)
+
+    if name == "send_slack_message":
+        return await asyncio.to_thread(
+            send_slack_message,
+            message=str(args.get("message", "")),
+            header=args.get("header"),
+        )
+
+    if name == "create_calendar_event":
+        return await asyncio.to_thread(
+            create_calendar_event,
+            title=str(args.get("title", "Trip event")),
+            description=args.get("description"),
+            when=args.get("when"),
+            duration_minutes=int(args.get("duration_minutes", 120)),
+            invitees=args.get("invitees") or [],
+        )
+
+    # All remaining bunq mutations: pay_vendor, create_draft_payment,
+    # schedule_recurring_payment, request_money, etc.
+    result = await asyncio.to_thread(_dispatch_bunq, toolbox, name, args)
+    if name == "create_draft_payment" and isinstance(result, dict) and "draft_id" in result:
+        session.pending_draft_ids.append(result["draft_id"])
+    return result
+
+
+async def _trip_generate_option_image(option: dict[str, Any]) -> None:
+    """Background task: generate one option's cartoon postcard, publish on the bus."""
+    option_id = option.get("id", "")
+    try:
+        url = await image_gen.generate_for_option(option)
+    except Exception as e:  # noqa: BLE001
+        print(f"[agent_loop] image gen crash for {option_id}: {e}", flush=True)
+        url = None
+    bus.publish("option_image", {
+        "option_id": option_id,
+        "image_url": url,
+        "status": "ok" if url else "failed",
+    })
+
+
+async def run_trip_turn(toolbox: BunqToolbox, session: TripSession, user_message: str, model: str | None = None) -> None:
+    """Run one user turn of the trip mission. Many tool calls may fire inside it.
+
+    Publishes:
+      - user_message {text}        — echo
+      - agent_message {text}       — final assistant text per turn
+      - trip_phase {value}         — when phase flips
+      - tool/step events as tools fire
+
+    Caller is responsible for catching exceptions; this function lets them bubble.
+    """
+    client = anthropic.Anthropic()
+    model = model or os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+
+    bus.publish("user_message", {"text": user_message})
+
+    # Confirmation gate — when the agent is awaiting a yes/no from the user.
+    if session.phase == PHASE_AWAITING_CONFIRMATION and _is_trip_yes(user_message):
+        session.phase = PHASE_EXECUTING
+        bus.publish("trip_phase", {"value": session.phase})
+
+    session.messages.append({"role": "user", "content": user_message})
+
+    system_prompt = MISSIONS["trip"]["system_prompt"]
+    system_blocks = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+
+    for _ in range(20):  # iteration cap per turn
+        tools = trip_tools_for_phase(session.phase)
+
+        def _call() -> Any:
+            return client.messages.create(
+                model=model,
+                max_tokens=2048,
+                system=system_blocks,
+                tools=tools,
+                messages=session.messages,
+            )
+
+        resp = await asyncio.to_thread(_call)
+        session.messages.append({"role": "assistant", "content": resp.content})
+
+        # Emit final text blocks as agent messages.
+        for block in resp.content:
+            if getattr(block, "type", None) == "text":
+                txt = block.text or ""
+                if txt.strip():
+                    bus.publish("agent_message", {"text": txt})
+
+        tool_uses = [b for b in resp.content if b.type == "tool_use"]
+        if not tool_uses:
+            break  # Claude is done for this turn; wait for user reply.
+
+        tool_results = []
+        stop_after = False
+        for tu in tool_uses:
+            name = tu.name
+            args = tu.input or {}
+
+            # Some tools end the turn (request_confirmation; finish_mission).
+            ends_turn = name in ("request_confirmation", "finish_mission")
+
+            try:
+                result = await _trip_dispatch(session, toolbox, name, args)
+            except Exception as e:  # noqa: BLE001
+                bus.publish("step_error", {"tool": name, "error": str(e)})
+                result = {"error": str(e)}
+
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tu.id,
+                "content": json.dumps(result, default=str),
+            })
+            if ends_turn:
+                stop_after = True
+
+        session.messages.append({"role": "user", "content": tool_results})
+        if stop_after:
+            break

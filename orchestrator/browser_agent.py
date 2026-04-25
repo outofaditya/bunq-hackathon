@@ -507,3 +507,163 @@ async def subscribe_to_service_via_browser(
         max_steps=max_steps,
         model=model,
     )
+
+
+# ============================================================================
+# search_trip_options — visible Playwright web-search beat (Trip mission)
+# ============================================================================
+
+import html as _html
+import re as _re
+import urllib.parse as _urlparse
+
+import httpx as _httpx
+
+
+_TRIPLENS_VIEWPORT = {"width": 900, "height": 560}
+_TRIPLENS_FRAME_INTERVAL_S = 0.35
+_TRIPLENS_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+async def _stream_search_frames(page: Page, stop: asyncio.Event, label_prefix: str = "search") -> None:
+    """JPEG frames every 0.35s on the council `browser_screenshot` channel."""
+    i = 0
+    while not stop.is_set():
+        try:
+            jpeg = await page.screenshot(type="jpeg", quality=65, full_page=False)
+            bus.publish("browser_screenshot", {
+                "label": f"{label_prefix} frame {i}",
+                "b64": base64.b64encode(jpeg).decode("ascii"),
+                "mime": "image/jpeg",
+            })
+            i += 1
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=_TRIPLENS_FRAME_INTERVAL_S)
+        except asyncio.TimeoutError:
+            continue
+
+
+def _ddg_blocking(query: str, max_results: int) -> list[dict[str, Any]]:
+    """Plain HTTP DuckDuckGo HTML endpoint scrape — synchronous, runs off-loop."""
+    headers = {"User-Agent": _TRIPLENS_USER_AGENT, "Referer": "https://html.duckduckgo.com/"}
+    data = {"q": query, "b": "", "kl": "us-en"}
+    with _httpx.Client(headers=headers, timeout=12.0, follow_redirects=True) as c:
+        r = c.post("https://html.duckduckgo.com/html/", data=data)
+        r.raise_for_status()
+        body = r.text
+
+    blocks = _re.findall(
+        r'<div[^>]*class="result[^"]*"[^>]*>([\s\S]*?)</div>\s*</div>\s*</div>',
+        body,
+    )
+    out: list[dict[str, Any]] = []
+    for blk in blocks:
+        m_title = _re.search(
+            r'<a\s+rel="nofollow"\s+class="result__a"\s+href="([^"]+)"[^>]*>([\s\S]*?)</a>',
+            blk,
+        )
+        if not m_title:
+            continue
+        url = _html.unescape(m_title.group(1))
+        parsed = _urlparse.urlparse(url)
+        if "duckduckgo.com" in parsed.netloc and parsed.path.startswith(("/l/", "/y.js")):
+            qs = _urlparse.parse_qs(parsed.query)
+            real = qs.get("uddg", [""])[0]
+            if real:
+                url = _urlparse.unquote(real)
+        title = _re.sub(r"<[^>]+>", "", m_title.group(2))
+        title = _html.unescape(title).strip()
+
+        m_snip = _re.search(
+            r'<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)</a>', blk
+        )
+        snippet = ""
+        if m_snip:
+            snippet = _re.sub(r"<[^>]+>", "", m_snip.group(1))
+            snippet = _html.unescape(snippet).strip()
+
+        if "/y.js" in (m_title.group(1) or ""):
+            continue
+
+        out.append({"title": title, "url": url, "snippet": snippet})
+        if len(out) >= max_results:
+            break
+    return out
+
+
+async def _ddg_fetch(query: str, max_results: int) -> list[dict[str, Any]]:
+    return await asyncio.to_thread(_ddg_blocking, query, max_results)
+
+
+async def search_trip_options(query: str, max_results: int = 6) -> dict[str, Any]:
+    """Visible web-search beat. Streams a TripLens animation while running a real DDG search.
+
+    Used by the trip mission. Publishes events:
+      - browser_started     — kick-off marker (also used by booking flows)
+      - browser_screenshot  — JPEG frames every 0.35s
+      - search_results      — final {query, results} payload for the Research feed
+      - browser_complete    — end marker
+    """
+    server_base = os.getenv("PUBLIC_BASE_URL", "").strip() or "http://localhost:8000"
+    server_loopback = "http://127.0.0.1:8000"
+
+    bus.publish("browser_started", {"site": "TripLens", "task": "search_trip_options", "query": query})
+
+    try:
+        results = await _ddg_fetch(query, max_results)
+    except Exception as e:  # noqa: BLE001
+        bus.publish("step_error", {"tool": "search_trip_options", "error": str(e)})
+        results = []
+
+    import json as _json
+    payload_json = _json.dumps(results, ensure_ascii=False)
+    payload_b64 = base64.b64encode(payload_json.encode("utf-8")).decode("ascii")
+    mock_url = (
+        f"{server_loopback}/mock-search/"
+        f"?q={_urlparse.quote(query)}&data={_urlparse.quote(payload_b64)}"
+    )
+
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            ctx = await browser.new_context(
+                viewport=_TRIPLENS_VIEWPORT,
+                device_scale_factor=1,
+                user_agent=_TRIPLENS_USER_AGENT,
+                locale="en-US",
+            )
+            page = await ctx.new_page()
+
+            stop = asyncio.Event()
+            streamer = asyncio.create_task(_stream_search_frames(page, stop))
+
+            try:
+                await page.goto(mock_url, wait_until="domcontentloaded", timeout=10000)
+                animation_ms = 45 * len(query) + 450 + 1100 + 160 * len(results) + 800
+                await asyncio.sleep(min(animation_ms, 8000) / 1000.0)
+
+                await page.evaluate("window.scrollBy({ top: 240, behavior: 'smooth' })")
+                await asyncio.sleep(0.9)
+
+                bus.publish("search_results", {"query": query, "results": results})
+                bus.publish("browser_complete", {"task": "search_trip_options", "query": query, "result_count": len(results)})
+                await asyncio.sleep(0.4)
+            finally:
+                stop.set()
+                try:
+                    await streamer
+                except Exception:
+                    pass
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+    except Exception as e:  # noqa: BLE001 — don't break demo on Playwright crash
+        bus.publish("step_error", {"tool": "search_trip_options", "error": str(e)})
+
+    return {"query": query, "results": results, "result_count": len(results)}

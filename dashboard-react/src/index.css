@@ -117,3 +117,58 @@
   color: var(--color-paper-300);
   display: inline-block;
 }
+
+/* =================== Markdown prose (Trip mission chat bubbles) =================== */
+
+.prose-md { word-wrap: break-word; overflow-wrap: anywhere; line-height: 1.55; }
+.prose-md > *:first-child { margin-top: 0; }
+.prose-md > *:last-child  { margin-bottom: 0; }
+.prose-md p { margin: 0 0 8px; }
+.prose-md p:last-child { margin-bottom: 0; }
+.prose-md h1, .prose-md h2, .prose-md h3, .prose-md h4 {
+  font-weight: 700; line-height: 1.25; margin: 12px 0 6px; color: var(--color-foreground);
+}
+.prose-md h1 { font-size: 17px; }
+.prose-md h2 { font-size: 15px; }
+.prose-md h3 { font-size: 14px; }
+.prose-md h4 {
+  font-size: 11px; color: var(--color-muted-foreground);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.prose-md strong { font-weight: 700; }
+.prose-md em { font-style: italic; }
+.prose-md a {
+  color: var(--color-punctual); text-decoration: none;
+  border-bottom: 1px dashed color-mix(in oklab, var(--color-punctual) 60%, transparent);
+  transition: color 120ms, border-color 120ms;
+}
+.prose-md a:hover { color: var(--color-foreground); border-bottom-color: var(--color-foreground); }
+.prose-md ul, .prose-md ol { margin: 4px 0 8px; padding-left: 22px; }
+.prose-md li { margin: 2px 0; }
+.prose-md ul li::marker { color: var(--color-punctual); }
+.prose-md blockquote {
+  margin: 6px 0; padding: 4px 12px;
+  border-left: 3px solid var(--color-punctual);
+  color: var(--color-muted-foreground);
+  background: color-mix(in oklab, var(--color-punctual) 5%, transparent);
+  border-radius: 0 6px 6px 0;
+}
+.prose-md hr { border: 0; height: 1px; background: var(--color-border); margin: 10px 0; }
+.prose-md code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--color-paper-800); border: 1px solid var(--color-paper-700);
+}
+.prose-md pre {
+  margin: 8px 0; padding: 10px 12px; border-radius: 8px;
+  background: var(--color-paper-950); border: 1px solid var(--color-paper-700);
+  overflow-x: auto; font-size: 12px; line-height: 1.45;
+}
+.prose-md pre code { padding: 0; border: 0; background: transparent; font-size: inherit; }
+
+.md-caret {
+  display: inline-block; width: 0; margin: 0 0 0 1px;
+  color: var(--color-punctual); animation: md-caret-blink 1s infinite;
+  transform: translateY(-1px);
+}
+@keyframes md-caret-blink { 50% { opacity: 0; } }

@@ -8,6 +8,7 @@ import { CascadeRow } from "@/components/CascadeRow";
 import { MicDialog } from "@/components/MicDialog";
 import { BrowserPanel, type BrowserPanelState } from "@/components/BrowserPanel";
 import { CouncilPanel, type CouncilState } from "@/components/CouncilPanel";
+import { TripView } from "@/components/TripView";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { useEventBus } from "@/hooks/useEventBus";
 import { useMicRecorder } from "@/hooks/useMicRecorder";
@@ -101,7 +102,7 @@ const FADE_UP = {
 };
 
 // =================== component ===================
-type ViewState = "idle" | "voice" | "running" | "complete";
+type ViewState = "idle" | "voice" | "running" | "complete" | "trip";
 
 export function App() {
   const [cascade, dispatch] = useReducer(cascadeReducer, { rows: [], inFlight: [] });
@@ -123,6 +124,8 @@ export function App() {
   const [awaitingConfirm, setAwaitingConfirm] = useState<{ question: string; action_summary: string; winning_persona_id: number | null } | null>(null);
   const [userConfirm, setUserConfirm] = useState<{ transcript: string; decision: string; picked_name?: string | null } | null>(null);
   const [voteOpen, setVoteOpen] = useState(false);
+  // Trip mission — interactive chat takeover.
+  const [tripEvent, setTripEvent] = useState<BusEvent | null>(null);
   const narrationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const newId = () => `r-${++idCounter.current}`;
@@ -180,6 +183,8 @@ export function App() {
   }, []);
 
   const handleEvent = useCallback((ev: BusEvent) => {
+    // Forward every event to the TripView (it filters internally).
+    setTripEvent(ev);
     switch (ev.type) {
       case "mission_started":
         dispatch({ type: "reset" });
@@ -656,7 +661,37 @@ export function App() {
                     {...FADE_UP}
                     className="m-auto flex flex-col items-center"
                   >
-                    <IdleMic onStart={onMicClick} disabled={!micReady} muted={!micReady} hint={genesisStarted ? "Building the council…" : undefined} />
+                    <IdleMic
+                      onStart={onMicClick}
+                      onTripStart={() => {
+                        // Reset bus + session, then enter chat-mode.
+                        fetch("/chat/reset", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ session_id: sessionStorage.getItem("trip-session-id") || "default" }),
+                        }).catch(() => { /* ignore */ });
+                        sessionStorage.removeItem("trip-session-id");
+                        setView("trip");
+                      }}
+                      disabled={!micReady}
+                      muted={!micReady}
+                      hint={genesisStarted ? "Building the council…" : undefined}
+                    />
+                  </motion.div>
+                )}
+
+                {/* TRIP — interactive chat takeover */}
+                {view === "trip" && (
+                  <motion.div
+                    key="trip"
+                    layout
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.32 }}
+                    className="w-full h-full"
+                  >
+                    <TripView event={tripEvent} onExit={resetAll} />
                   </motion.div>
                 )}
 
@@ -772,7 +807,19 @@ export function App() {
 }
 
 // =================== sub-components ===================
-function IdleMic({ onStart, disabled, muted, hint }: { onStart: () => void; disabled?: boolean; muted?: boolean; hint?: string }) {
+function IdleMic({
+  onStart,
+  onTripStart,
+  disabled,
+  muted,
+  hint,
+}: {
+  onStart: () => void;
+  onTripStart?: () => void;
+  disabled?: boolean;
+  muted?: boolean;
+  hint?: string;
+}) {
   return (
     <div className="relative flex flex-col items-center">
       <div className="pointer-events-none absolute inset-0 -m-32 rounded-full opacity-[0.10] blur-3xl bg-[radial-gradient(closest-side,var(--color-punctual),transparent)]" />
@@ -797,11 +844,22 @@ function IdleMic({ onStart, disabled, muted, hint }: { onStart: () => void; disa
       <h1 className="text-title-lg text-foreground mt-9 mb-1.5">
         {muted ? (hint || "Preparing the room…") : "Tap to talk"}
       </h1>
-      <p className="text-body text-muted-foreground mb-7">
+      <p className="text-body text-muted-foreground mb-3">
         {muted
           ? "We're seeding your accounts and assembling the council. The mic unlocks when they're ready."
           : "Speak the mission like you'd say it to a friend."}
       </p>
+
+      {!muted && onTripStart && (
+        <button
+          type="button"
+          onClick={onTripStart}
+          disabled={disabled}
+          className="text-meta text-punctual hover:text-foreground transition-colors mb-6 underline-offset-4 hover:underline disabled:opacity-40"
+        >
+          or chat with the Trip Agent →
+        </button>
+      )}
 
       {!muted && (
         <div className="flex flex-col items-center gap-1">

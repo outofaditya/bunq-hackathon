@@ -38,11 +38,12 @@ from bunq_client import BunqClient
 
 import anthropic
 
-from .agent_loop import run_mission
+from .agent_loop import run_mission, run_trip_turn
 from .bunq_tools import BunqToolbox
 from .events import bus
 from .missions import MISSIONS
 from .places import search_hotels, search_restaurants
+from .sessions import get_or_create as get_session, reset as reset_session
 from .stt import transcribe_bytes, transcribe_file
 from .subscriptions import list_plans
 
@@ -844,6 +845,144 @@ async def state() -> dict[str, Any]:
         "history": bus._history,
         "mission_running": bool(_mission_thread and _mission_thread.is_alive()),
     }
+
+
+# ----------------------------------------------------------------------
+# Trip mission — interactive chat (multi-turn)
+# ----------------------------------------------------------------------
+
+@app.post("/chat")
+async def chat(request: Request) -> dict[str, Any]:
+    """Interactive chat for the Trip mission.
+
+    Body: {session_id: str, message: str}. Streams events via the existing /events SSE.
+    """
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    session_id = str(body.get("session_id", "default"))
+    message = str(body.get("message", "")).strip()
+    if not message:
+        return {"ok": False, "error": "message is required"}
+
+    session = get_session(session_id)
+    tb = _get_toolbox()
+    try:
+        await run_trip_turn(tb, session, message)
+    except Exception as e:  # noqa: BLE001
+        bus.publish("mission_error", {"error": str(e)})
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "phase": session.phase}
+
+
+@app.post("/chat/reset")
+async def chat_reset(request: Request) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    session_id = str(body.get("session_id", "default"))
+    reset_session(session_id)
+    bus.reset()
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------
+# TripLens mock search page (Trip mission's visible research beat)
+# ----------------------------------------------------------------------
+
+_TRIPLENS_HTML: str | None = None
+
+
+def _triplens_html() -> str:
+    global _TRIPLENS_HTML
+    if _TRIPLENS_HTML is None:
+        _TRIPLENS_HTML = (MOCK_SITES_DIR / "search" / "index.html").read_text()
+    return _TRIPLENS_HTML
+
+
+@app.get("/mock-search/")
+@app.get("/mock-search")
+async def mock_search_index() -> Any:
+    """Serve the TripLens HTML page. Query params (`q`, `data`) are read by JS."""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(_triplens_html())
+
+
+# ----------------------------------------------------------------------
+# Trip-mission debug endpoints (rehearsal + smoke testing)
+# ----------------------------------------------------------------------
+
+@app.post("/debug/generate-image")
+async def debug_generate_image(request: Request) -> dict[str, Any]:
+    """Smoke-test the OpenRouter Seedream pipeline.
+
+    Body: either {prompt: "..."} or a PackageOption-shaped dict.
+    """
+    from . import image_gen
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if "prompt" in body:
+        url = await image_gen.generate_image(body["prompt"])
+    else:
+        url = await image_gen.generate_for_option(body)
+    if not url:
+        return {"ok": False, "error": "image generation failed; see server log"}
+    return {"ok": True, "image_url": url, "length": len(url)}
+
+
+@app.post("/debug/search-trip-options")
+async def debug_search_trip_options(request: Request) -> dict[str, Any]:
+    """Fire the live TripLens search without the LLM. Frames + links go on /events."""
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    query = str(body.get("query") or "boutique hotel Amsterdam canal")
+    from .browser_agent import search_trip_options
+    out = await search_trip_options(query=query, max_results=int(body.get("max_results", 6)))
+    return {"ok": True, **out}
+
+
+@app.post("/debug/present-options")
+async def debug_present_options(request: Request) -> dict[str, Any]:
+    """Publish a fake `options` event + kick off image gen for each option.
+
+    Lets the team rehearse the cards UI without burning Claude tokens.
+    """
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    options = body.get("options") or [
+        {"id": "opt-a", "hotel": "Hotel V Fizeaustraat", "restaurant": "De Kas",
+         "extra": "Canal sunset cruise", "total_eur": 445,
+         "notes": "Calm, southeast Amsterdam, great for couples",
+         "sources": [{"label": "tripadvisor.com", "url": "https://www.tripadvisor.com"}]},
+        {"id": "opt-b", "hotel": "Casa Cook Amsterdam", "restaurant": "La Perla",
+         "extra": "Vondelpark picnic", "total_eur": 480,
+         "notes": "Bohemian, central, plant-filled lobby",
+         "sources": [{"label": "casacook.com", "url": "https://casacook.com"}]},
+        {"id": "opt-c", "hotel": "The Hoxton Lloyd", "restaurant": "Restaurant Floris",
+         "extra": "Anne Frank House visit", "total_eur": 510,
+         "notes": "Boutique, lively, walking distance to canals",
+         "sources": [{"label": "thehoxton.com", "url": "https://thehoxton.com"}]},
+    ]
+    intro = body.get("intro_text") or "Three weekend picks for Amsterdam:"
+    bus.publish("options", {"intro": intro, "options": options})
+    from .agent_loop import _trip_generate_option_image
+    for opt in options:
+        asyncio.create_task(_trip_generate_option_image(opt))
+    return {"ok": True, "options_count": len(options)}
 
 
 # ----------------------------------------------------------------------
