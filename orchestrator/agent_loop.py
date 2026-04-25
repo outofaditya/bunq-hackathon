@@ -18,6 +18,7 @@ import asyncio
 from .browser_agent import book_restaurant_via_browser
 from .bunq_tools import BunqToolbox
 from .events import bus
+from .side_tools import create_calendar_event, send_slack_message
 from .tool_catalog import BUNQ_TOOLS
 from .tts import synthesize_narration
 
@@ -173,6 +174,33 @@ def run_mission(
 
             if name == "book_restaurant":
                 result = _dispatch_browser(args)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps(result, default=str),
+                })
+                continue
+
+            if name == "send_slack_message":
+                result = send_slack_message(
+                    message=str(args.get("message", "")),
+                    header=args.get("header"),
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps(result, default=str),
+                })
+                continue
+
+            if name == "create_calendar_event":
+                result = create_calendar_event(
+                    title=str(args.get("title", "Mission event")),
+                    description=args.get("description"),
+                    when=args.get("when"),
+                    duration_minutes=int(args.get("duration_minutes", 120)),
+                    invitees=args.get("invitees") or [],
+                )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,

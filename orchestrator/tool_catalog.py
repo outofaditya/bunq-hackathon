@@ -191,6 +191,41 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "send_slack_message",
+        "description": (
+            "Send a Slack DM/channel message via the configured incoming webhook. "
+            "Use this to notify a friend or partner during a mission (e.g. 'Friday. Don't plan. Trust me.'). "
+            "Keep messages short — they read like a real text. Use the optional `header` for a bold title."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "header": {"type": "string", "description": "Short bold title rendered above the message."},
+            },
+            "required": ["message"],
+        },
+    },
+    {
+        "name": "create_calendar_event",
+        "description": (
+            "Create a Google Calendar event on the user's primary calendar. Optional invitees get "
+            "an email invitation. Use `when` for free-text times like 'Friday 19:30'; if omitted, "
+            "defaults to the upcoming Friday at 19:30."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "when": {"type": "string"},
+                "duration_minutes": {"type": "integer", "minimum": 15, "maximum": 480},
+                "invitees": {"type": "array", "items": {"type": "string", "format": "email"}},
+            },
+            "required": ["title"],
+        },
+    },
+    {
         "name": "narrate",
         "description": (
             "Speak a one-line summary to the user via TTS. Use AT MOST once per step so the demo "

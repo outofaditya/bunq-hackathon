@@ -560,6 +560,9 @@ const ICONS = {
   schedule_recurring_payment: "🔁",
   request_money: "📨",
   create_bunqme_link: "🔗",
+  book_restaurant: "🧭",
+  send_slack_message: "💬",
+  create_calendar_event: "📅",
 };
 
 function vendorIcon(vendor) {
@@ -621,6 +624,18 @@ function renderStarted(payload) {
     title = `Create share link`;
     desc = payload.description || "";
     amount = fmtEur(payload.amount_eur);
+  } else if (payload.tool === "book_restaurant") {
+    title = `Book restaurant`;
+    desc = `Hint: ${payload.restaurant_hint || "?"} · budget €${payload.max_budget_eur} · ${payload.when || ""}`;
+    amount = "";
+  } else if (payload.tool === "send_slack_message") {
+    title = `Slack: ${payload.header || "Mission Agent"}`;
+    desc = payload.preview || "";
+    amount = "";
+  } else if (payload.tool === "create_calendar_event") {
+    title = `Calendar: ${payload.title || "Event"}`;
+    desc = (payload.when || "") + (payload.invitees && payload.invitees.length ? ` · invitees: ${payload.invitees.join(", ")}` : "");
+    amount = "";
   }
 
   tile.innerHTML = `
@@ -655,6 +670,9 @@ function renderFinished(payload) {
   else if (r.schedule_id)   idsEl.textContent = `schedule_id=${r.schedule_id}`;
   else if (r.request_id)    idsEl.textContent = `request_id=${r.request_id}`;
   else if (r.bunqme_tab_id) idsEl.textContent = `tab_id=${r.bunqme_tab_id}`;
+  else if (r.event_id)      idsEl.textContent = `event_id=${r.event_id.slice(0, 12)}…`;
+  else if (payload.tool === "send_slack_message" && r.ok) idsEl.textContent = `delivered to channel`;
+  else if (payload.tool === "book_restaurant" && r.restaurant_name) idsEl.textContent = `${r.restaurant_name} · €${r.price_eur} · ref ${r.reference || ""}`;
 
   const badge = tile.querySelector(".badge");
   if (badge) {
