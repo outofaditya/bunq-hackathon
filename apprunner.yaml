@@ -1,0 +1,29 @@
+# AWS App Runner deployment config — source-mode fallback.
+#
+# Most teams will deploy the Docker image built by deploy/build-and-push.sh
+# instead — see DEPLOY.md. This file is here so App Runner CAN deploy
+# directly from this GitHub repo if you prefer.
+#
+# Limitation of source mode: builds are slower (no caching) and Playwright
+# browser install needs apt root access. The image-based path is faster.
+
+version: 1.0
+runtime: python311
+build:
+  commands:
+    pre-build:
+      - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      - apt-get install -y nodejs
+      - cd dashboard-react && npm ci --no-audit --no-fund && npm run build
+    build:
+      - pip install -r requirements.txt
+      - playwright install --with-deps chromium
+run:
+  runtime-version: 3.11
+  command: uvicorn orchestrator.server:app --host 0.0.0.0 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips '*'
+  network:
+    port: 8000
+    env: PORT
+  env:
+    - name: PYTHONUNBUFFERED
+      value: "1"

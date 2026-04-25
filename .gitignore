@@ -1,20 +1,27 @@
-# Sensitive files
+# --- Secrets (NEVER commit) ------------------------------------------------
 .env
 *.env
-bunq_context.json
+!.env.example
 *.key
 *.pem
 google_oauth_client.json
+google_token.json
+.bunq-hackathon/
 
-# React / Vite
+# --- Per-machine runtime state --------------------------------------------
+bunq_context.json
+bunq_personas.json
+
+# --- Build output ---------------------------------------------------------
 dashboard-react/node_modules/
-# dashboard-react/dist/
+dashboard-react/dist/
 
-# Runtime artefacts
+# --- Runtime artefacts ----------------------------------------------------
 assets/tts_cache/
 .pytest_cache/
+*.log
 
-# Python
+# --- Python ---------------------------------------------------------------
 __pycache__/
 *.pyc
 *.pyo
@@ -22,11 +29,9 @@ venv/
 .venv/
 *.egg-info/
 
-# IDE
+# --- IDE / OS -------------------------------------------------------------
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# OS
 .DS_Store

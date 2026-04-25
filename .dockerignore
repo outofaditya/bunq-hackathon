@@ -1,0 +1,45 @@
+# --- Secrets ---
+.env
+*.env
+!.env.example
+google_oauth_client.json
+google_token.json
+bunq_context.json
+bunq_personas.json
+*.pem
+*.key
+
+# --- Build / cache output ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+assets/tts_cache/*.mp3
+dashboard-react/node_modules/
+dashboard-react/dist/
+
+# --- VCS / IDE ---
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# --- Docs / dev artefacts ---
+README.md
+DEPLOY.md
+docs/
+plans/
+.claude/
+
+# --- Not needed at runtime ---
+test_*.py
+verify_*.py
+tests/
+dashboard/
+start.sh
+stop.sh

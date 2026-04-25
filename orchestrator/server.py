@@ -110,6 +110,20 @@ app = FastAPI(title="Mission Mode Orchestrator")
 async def _startup() -> None:
     global _public_url
 
+    # Surface missing env vars BEFORE we hit anything that needs them.
+    required = {
+        "BUNQ_API_KEY":        "bunq sandbox auth",
+        "ANTHROPIC_API_KEY":   "Claude (mission planner)",
+        "ELEVENLABS_API_KEY":  "TTS + STT (audio in/out)",
+        "ELEVENLABS_VOICE_ID": "TTS narrator voice",
+    }
+    missing = [(k, v) for k, v in required.items() if not os.getenv(k, "").strip()]
+    if missing:
+        print("[server] WARNING — missing env vars:", flush=True)
+        for k, why in missing:
+            print(f"           {k:22s} ({why})", flush=True)
+        print("           Copy .env.example → .env and fill these in.", flush=True)
+
     # Authenticate bunq + cache toolbox.
     tb = _get_toolbox()
     print(f"[server] authenticated as user {tb.client.user_id}, primary={tb.primary_id} ({tb.primary_iban})")
@@ -616,12 +630,18 @@ async def admin_cleanup_demo_subs(request: Request) -> dict[str, Any]:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    """Readiness probe — also surfaces missing env vars so cloners know what
+    to set without grepping the source."""
+    required = ["BUNQ_API_KEY", "ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"]
+    missing = [k for k in required if not os.getenv(k, "").strip()]
     return {
-        "ok": True,
+        "ok": not missing,
         "user_id": _bunq_client.user_id if _bunq_client else None,
         "primary_id": _toolbox.primary_id if _toolbox else None,
         "public_url": _public_url,
         "mission_running": bool(_mission_thread and _mission_thread.is_alive()),
+        "env_missing": missing,
+        "audio_ready": "ELEVENLABS_API_KEY" not in missing and "ELEVENLABS_VOICE_ID" not in missing,
     }
 
 
@@ -638,7 +658,9 @@ async def state() -> dict[str, Any]:
 # ----------------------------------------------------------------------
 
 def main() -> None:
-    uvicorn.run("orchestrator.server:app", host="0.0.0.0", port=8000, reload=False)
+    # AWS App Runner / Cloud Run / Heroku set $PORT; fall back to 8000 locally.
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("orchestrator.server:app", host="0.0.0.0", port=port, reload=False)
 
 
 if __name__ == "__main__":

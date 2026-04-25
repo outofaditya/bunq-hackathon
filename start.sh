@@ -65,15 +65,51 @@ fi
 
 # --- preflight ---------------------------------------------------------
 
+# Bootstrap Python venv if missing (fresh clone path).
 if [[ ! -f "$PROJECT_ROOT/.venv/bin/activate" ]]; then
-    err ".venv not found at $PROJECT_ROOT/.venv"
-    err "Run:  python3.13 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+    warn ".venv not found — bootstrapping (one-time, ~30s)…"
+    PYTHON_BIN="$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3)"
+    if [[ -z "$PYTHON_BIN" ]]; then
+        err "no python3 found in PATH. Install Python 3.10+ first."
+        exit 1
+    fi
+    "$PYTHON_BIN" -m venv .venv
+    # shellcheck disable=SC1091
+    source "$PROJECT_ROOT/.venv/bin/activate"
+    pip install --quiet --upgrade pip
+    pip install --quiet -r requirements.txt
+    ok "venv ready ($("$PYTHON_BIN" --version))"
+fi
+
+# .env: copy from example on first run, then prompt the user to fill it in.
+if [[ ! -f "$PROJECT_ROOT/.env" ]]; then
+    if [[ -f "$PROJECT_ROOT/.env.example" ]]; then
+        cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+        warn ".env was missing — copied .env.example to .env."
+        warn "Fill in BUNQ_API_KEY, ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID then re-run."
+        exit 1
+    fi
+    err ".env not found and no .env.example to copy from. Manual setup required."
     exit 1
 fi
 
-if [[ ! -f "$PROJECT_ROOT/.env" ]]; then
-    err ".env not found in project root. Phase 0 setup required."
-    exit 1
+# Build the dashboard if dist/ is missing or stale (every fresh clone hits this).
+if [[ ! -f "$PROJECT_ROOT/dashboard-react/dist/index.html" ]]; then
+    if ! command -v npm >/dev/null 2>&1; then
+        err "npm not in PATH — install Node.js 22+ to build the React dashboard."
+        err "  brew install node@22       # macOS"
+        exit 1
+    fi
+    log "dashboard-react/dist/ missing — building…"
+    (
+        cd "$PROJECT_ROOT/dashboard-react"
+        if [[ ! -d "node_modules" ]]; then
+            log "running npm ci…"
+            npm ci --no-audit --no-fund
+        fi
+        npm run build
+    ) || { err "dashboard build failed."; exit 1; }
+    ok "dashboard built → dashboard-react/dist/"
 fi
 
 if [[ "$USE_NGROK" == "1" ]] && ! command -v ngrok >/dev/null 2>&1; then
