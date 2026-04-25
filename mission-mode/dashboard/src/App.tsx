@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import Chat from "./Chat";
 import Dashboard from "./Dashboard";
+import { AnimatedNumber } from "./AnimatedNumber";
+import { audioQueue, fxBuzz, fxChime, fxDoneStep, fxTick } from "./audio-fx";
 import type { ChatEntry, Phase, ServerEvent, TileName, TileState } from "./types";
+
+type ConnectionStatus = "connecting" | "live" | "reconnecting";
 
 const INITIAL_TILES: TileState[] = [
   { name: "create_sub_account", label: "Sub-account", status: "idle" },
@@ -24,15 +28,18 @@ export default function App() {
   const [browserFrame, setBrowserFrame] = useState<string | null>(null);
   const [browserStatus, setBrowserStatus] = useState<{ status: string; step?: string; hotel?: string; booking_ref?: string; query?: string } | null>(null);
   const [searchFeed, setSearchFeed] = useState<{ query: string; results: { title: string; url: string; snippet: string }[] }[]>([]);
+  const [primaryBalance, setPrimaryBalance] = useState<number | null>(null);
+  const [connection, setConnection] = useState<ConnectionStatus>("connecting");
   const sseRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const ttsQueueRef = useRef<HTMLAudioElement[]>([]);
 
   // Mount SSE once
   useEffect(() => {
     const es = new EventSource("/events");
     sseRef.current = es;
+    es.onopen = () => setConnection("live");
+    es.onerror = () => setConnection("reconnecting");
     es.onmessage = (e) => {
       let evt: ServerEvent;
       try {
@@ -42,16 +49,14 @@ export default function App() {
       }
       handleEvent(evt);
     };
-    es.onerror = () => {
-      // Will auto-reconnect; no-op
-    };
     return () => es.close();
   }, []);
 
   function handleEvent(evt: ServerEvent) {
     switch (evt.type) {
       case "user_message":
-        setEntries((xs) => [...xs, { kind: "user", text: evt.text }]);
+        // Handled optimistically in sendMessage(); no-op here so we don't
+        // double-render if any code path ever republishes it.
         break;
 
       case "agent_text_delta":
@@ -75,6 +80,10 @@ export default function App() {
         break;
 
       case "tool_call":
+        // Sound effects: subtle tick on firing, soft confirm on ok, low buzz on failure.
+        if (evt.status === "firing") fxTick();
+        else if (evt.status === "ok") fxDoneStep();
+        else if (evt.status === "failed") fxBuzz();
         setEntries((xs) => [
           ...xs,
           { kind: "tool", name: evt.name, status: evt.status, input: evt.input, result: evt.result, error: evt.error },
@@ -168,16 +177,22 @@ export default function App() {
       case "narration":
         setEntries((xs) => [...xs, { kind: "narration", text: evt.text }]);
         setLastNarration(evt.text);
-        // Kick off TTS audio stream
-        playTTS(evt.text);
+        // Stream TTS audio via the shared sequential queue (no overlapping clips).
+        audioQueue.enqueue(`/tts?text=${encodeURIComponent(evt.text)}`);
         break;
 
       case "phase":
         setPhase(evt.value);
+        // Mission-complete chord on DONE.
+        if (evt.value === "DONE") fxChime();
         break;
 
       case "balance":
         setBalance((b) => (b ? { ...b, value: evt.value_eur } : b));
+        break;
+
+      case "balance_snapshot":
+        setPrimaryBalance(evt.primary_balance_eur);
         break;
 
       case "browser_frame":
@@ -202,6 +217,10 @@ export default function App() {
   }
 
   function sendMessage(text: string) {
+    // Optimistic UI: show the user bubble immediately. The server no longer
+    // re-broadcasts user_message over SSE (would double-render), so this is
+    // the sole source of the user bubble.
+    setEntries((xs) => [...xs, { kind: "user", text }]);
     fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -242,14 +261,29 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="logo">
-          <span className="logo-mark">✈</span>
-          <span>Trip Agent</span>
-          <span className="logo-sub">for bunq</span>
+        <div className="brand">
+          <span className="brand-mark">bunq</span>
+          <span className="brand-divider" />
+          <div className="brand-product">
+            <span className="brand-product-name">Trip Agent</span>
+            <span className="brand-tagline">bank of The Free</span>
+          </div>
         </div>
+        <div className="spacer" />
+        {primaryBalance !== null && (
+          <div className="primary-balance" title="Primary account balance">
+            <span className="primary-balance-label">Primary</span>
+            <AnimatedNumber
+              value={primaryBalance}
+              format={(n) => `€${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              className="primary-balance-amount tabular"
+            />
+          </div>
+        )}
         <div className="phase-pill" data-phase={phase}>
-          {phase}
+          {phase.replace(/_/g, " ")}
         </div>
+        <ConnectionIndicator status={connection} />
       </header>
       <main className="app-body">
         <Chat
@@ -269,6 +303,7 @@ export default function App() {
           searchFeed={searchFeed}
         />
       </main>
+      <div className="rainbow-strip" aria-hidden="true" />
     </div>
   );
 }
@@ -296,35 +331,36 @@ function detailFor(name: string, result: unknown): string | undefined {
   return undefined;
 }
 
-// Sequential TTS playback — queue phrases so they don't overlap
-const ttsQueue: HTMLAudioElement[] = [];
-let ttsPlaying = false;
-
-function playTTS(text: string) {
-  try {
-    const audio = new Audio(`/tts?text=${encodeURIComponent(text)}`);
-    audio.onended = () => {
-      ttsPlaying = false;
-      pumpQueue();
-    };
-    audio.onerror = () => {
-      ttsPlaying = false;
-      pumpQueue();
-    };
-    ttsQueue.push(audio);
-    pumpQueue();
-  } catch {
-    // ignore
-  }
+function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
+  const label = status === "live" ? "Live" : status === "reconnecting" ? "Reconnecting" : "Connecting";
+  return (
+    <div className={`conn-indicator conn-${status}`} title={`SSE: ${status}`}>
+      {status === "live" ? <WifiOnIcon /> : <WifiOffIcon />}
+      <span className="conn-label">{label}</span>
+    </div>
+  );
 }
 
-function pumpQueue() {
-  if (ttsPlaying) return;
-  const next = ttsQueue.shift();
-  if (!next) return;
-  ttsPlaying = true;
-  next.play().catch(() => {
-    ttsPlaying = false;
-    pumpQueue();
-  });
+function WifiOnIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 9.5a16 16 0 0 1 20 0" />
+      <path d="M5.5 13a11 11 0 0 1 13 0" />
+      <path d="M9 16.5a6 6 0 0 1 6 0" />
+      <circle cx="12" cy="20" r="0.9" fill="currentColor" stroke="none" />
+    </svg>
+  );
 }
+
+function WifiOffIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 3l18 18" />
+      <path d="M16.7 13.7a8 8 0 0 0-9.4 0" />
+      <path d="M2 9.5a16 16 0 0 1 6.5-3.5" />
+      <path d="M15.5 6a16 16 0 0 1 6.5 3.5" />
+      <circle cx="12" cy="20" r="0.9" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+

@@ -21,6 +21,8 @@ class Session:
     sub_account_id: int | None = None
     sub_account_iban: str | None = None
     pending_draft_ids: list[int] = field(default_factory=list)
+    narrations: list[str] = field(default_factory=list)
+    closing_line_emitted: bool = False
 
 
 _sessions: dict[str, Session] = {}

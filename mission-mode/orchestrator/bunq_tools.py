@@ -58,6 +58,22 @@ def get_primary_account() -> dict[str, Any]:
     raise RuntimeError("No active primary account found")
 
 
+def snapshot_primary_balance(step_label: str) -> dict[str, Any]:
+    """Fetch the current primary balance and return a balance_snapshot payload.
+
+    Synchronous — the async caller is expected to publish the result over SSE
+    (we don't publish from here because we're typically called from a
+    threadpool worker via asyncio.to_thread, where the asyncio.Queue used by
+    the bus isn't thread-safe).
+    """
+    primary = get_primary_account()
+    return {
+        "step": step_label,
+        "primary_id": primary["id"],
+        "primary_balance_eur": primary["balance_eur"],
+    }
+
+
 # --------------------------------------------------------------------------
 # Tool 1 — create a savings sub-account with a goal
 # --------------------------------------------------------------------------

@@ -60,4 +60,5 @@ export type ServerEvent =
   | { type: "browser_frame"; jpeg_b64: string }
   | { type: "browser_status"; status: string; step?: string; hotel?: string; booking_ref?: string; query?: string; result_count?: number }
   | { type: "search_results"; query: string; results: { title: string; url: string; snippet: string }[] }
-  | { type: "option_image"; option_id: string; image_url: string | null; status: "ok" | "failed" };
+  | { type: "option_image"; option_id: string; image_url: string | null; status: "ok" | "failed" }
+  | { type: "balance_snapshot"; step: string; primary_id: number; primary_balance_eur: number };

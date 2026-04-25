@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -19,6 +21,34 @@ from .events import bus
 from .sessions import get_or_create
 
 load_dotenv()
+
+
+_OPENING_LINES = [
+    "Alright, what's the mission?",
+    "I'm listening — what are we planning?",
+    "Tell me what you need.",
+    "Ready when you are. Where to?",
+    "Okay, what's the trip?",
+]
+
+
+_runtime: dict[str, str | bool] = {
+    "public_url": "",
+    "webhooks_registered": False,
+}
+
+
+def _discover_ngrok_url() -> str | None:
+    """Query the local ngrok agent for an active https tunnel pointing at :8000."""
+    try:
+        r = httpx.get("http://127.0.0.1:4040/api/tunnels", timeout=2.0)
+        r.raise_for_status()
+        for tun in r.json().get("tunnels", []):
+            if tun.get("proto") == "https":
+                return tun.get("public_url")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 ROOT = Path(__file__).resolve().parent.parent
 MOCK_SITES = ROOT / "mock_sites"
@@ -229,23 +259,91 @@ if (DASHBOARD_DIST / "assets").exists():
 
 @app.on_event("startup")
 async def startup() -> None:
-    print(f"[startup] BUNQ_API_KEY present: {bool(os.getenv('BUNQ_API_KEY'))}")
-    print(f"[startup] ANTHROPIC_API_KEY present: {bool(os.getenv('ANTHROPIC_API_KEY'))}")
-    print(f"[startup] ELEVENLABS_API_KEY present: {bool(os.getenv('ELEVENLABS_API_KEY'))}")
-    public_url = os.getenv("PUBLIC_BASE_URL", "")
-    print(f"[startup] PUBLIC_BASE_URL: {public_url or '(unset — webhook registration skipped)'}")
+    print(f"[startup] BUNQ_API_KEY present: {bool(os.getenv('BUNQ_API_KEY'))}", flush=True)
+    print(f"[startup] ANTHROPIC_API_KEY present: {bool(os.getenv('ANTHROPIC_API_KEY'))}", flush=True)
+    print(f"[startup] ELEVENLABS_API_KEY present: {bool(os.getenv('ELEVENLABS_API_KEY'))}", flush=True)
+
+    # Resolve public URL: explicit env wins, otherwise auto-discover from ngrok.
+    env_url = os.getenv("PUBLIC_BASE_URL", "").strip()
+    discovered = _discover_ngrok_url() if not env_url else None
+    public_url = env_url or discovered or ""
+    if env_url:
+        print(f"[startup] PUBLIC_BASE_URL (from env): {public_url}", flush=True)
+    elif discovered:
+        print(f"[startup] PUBLIC_BASE_URL (auto-discovered via ngrok): {public_url}", flush=True)
+    else:
+        print(
+            "[startup] PUBLIC_BASE_URL unset and no local ngrok tunnel found "
+            "(http://127.0.0.1:4040). bunq webhooks disabled — run "
+            "`ngrok http 8000` to enable.",
+            flush=True,
+        )
+    _runtime["public_url"] = public_url
 
     # Top up primary balance so the demo always has funds
     try:
         topup = await asyncio.to_thread(bunq_tools.ensure_primary_balance)
-        print(f"[startup] balance check: {topup}")
+        print(f"[startup] balance check: {topup}", flush=True)
     except Exception as e:
-        print(f"[startup] ensure_primary_balance failed: {e}")
+        print(f"[startup] ensure_primary_balance failed: {e}", flush=True)
+
+    # Initial primary balance snapshot so dashboards see a starting value.
+    try:
+        snap = await asyncio.to_thread(bunq_tools.snapshot_primary_balance, "startup")
+        await bus.publish("balance_snapshot", **snap)
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] initial balance snapshot failed: {e}", flush=True)
 
     # Register webhook subscriptions when tunnel is set
     if public_url:
         try:
             out = await asyncio.to_thread(bunq_tools.register_webhooks, public_url)
-            print(f"[startup] webhooks registered: {out['registered']} → {out['target']}")
+            print(f"[startup] webhooks registered: {out['registered']} → {out['target']}", flush=True)
+            _runtime["webhooks_registered"] = True
         except Exception as e:
-            print(f"[startup] webhook registration failed: {e}")
+            print(f"[startup] webhook registration failed: {e}", flush=True)
+
+
+@app.get("/health")
+async def health() -> JSONResponse:
+    """Readiness probe — surfaces missing env vars + auth state for the dashboard."""
+    required = ["BUNQ_API_KEY", "ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"]
+    missing = [k for k in required if not os.getenv(k, "").strip()]
+    user_id = None
+    primary_id = None
+    try:
+        primary = await asyncio.to_thread(bunq_tools.get_primary_account)
+        primary_id = primary["id"]
+        user_id = bunq_tools.client().user_id
+    except Exception:  # noqa: BLE001
+        pass
+    return JSONResponse({
+        "ok": not missing and primary_id is not None,
+        "user_id": user_id,
+        "primary_id": primary_id,
+        "public_url": _runtime["public_url"] or None,
+        "webhooks_registered": bool(_runtime["webhooks_registered"]),
+        "env_missing": missing,
+        "audio_ready": "ELEVENLABS_API_KEY" not in missing and "ELEVENLABS_VOICE_ID" not in missing,
+    })
+
+
+@app.get("/state")
+async def state() -> JSONResponse:
+    """Snapshot of the recent SSE history. Useful for a presenter 'replay last run' button."""
+    return JSONResponse({"history": bus.history()})
+
+
+@app.get("/tts/opening")
+async def tts_opening() -> StreamingResponse:
+    """Stream a quick greeting line so the agent feels reactive on mic-tap.
+
+    Picks one line at random and proxies the ElevenLabs streaming TTS for it.
+    GET so it can be the src of a <audio> element.
+    """
+    line = random.choice(_OPENING_LINES)
+    return StreamingResponse(
+        voice.stream_tts(line),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store", "X-Opening-Line": line},
+    )

@@ -42,7 +42,7 @@ export default function Dashboard({ tiles, balance, narration, sessionId, browse
       <div className="dash-section balance-card">
         {balance ? (
           <>
-            <div className="balance-label">Sub-account</div>
+            <div className="dash-heading">Sub-account</div>
             <div className="balance-name">{balance.name}</div>
             <div className="balance-amount">
               €{displayValue.toFixed(2)}
@@ -58,7 +58,7 @@ export default function Dashboard({ tiles, balance, narration, sessionId, browse
       </div>
 
       <div className="dash-section tiles">
-        <div className="tiles-label">Actions</div>
+        <div className="dash-heading">Actions</div>
         <div className="tile-strip">
           {tiles.map((tile) => (
             <div key={tile.name} className={`tile status-${tile.status}`}>
@@ -92,7 +92,7 @@ export default function Dashboard({ tiles, balance, narration, sessionId, browse
 
       <div className="dash-section browser-panel">
         <div className="browser-label">
-          <span>Agent Browser</span>
+          <span className="dash-heading" style={{ marginBottom: 0 }}>Agent Browser</span>
           {browserStatus && (
             <span className="browser-badge">
               {browserStatus.status === "done" && browserStatus.booking_ref

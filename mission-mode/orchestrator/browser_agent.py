@@ -36,6 +36,90 @@ USER_AGENT = (
 )
 
 
+# ─── Animated cursor overlay ─────────────────────────────────────────────
+# Injects a fake "agent cursor" into the page so screenshots show where the
+# agent is clicking. Colored bunq-orange (#FF7819) per brand.
+
+_CURSOR_INJECT_JS = r"""
+() => {
+  if (document.getElementById('__agent_cursor')) return;
+  const c = document.createElement('div');
+  c.id = '__agent_cursor';
+  c.style.cssText =
+    'position:fixed;pointer-events:none;width:18px;height:18px;border-radius:50%;'
+    +'background:rgba(255,120,25,0.85);border:2px solid #fff;'
+    +'transform:translate(-50%,-50%) scale(1);'
+    +'z-index:99999;box-shadow:0 4px 14px rgba(0,0,0,0.35);'
+    +'left:50%;top:30%;'
+    +'transition:left .42s cubic-bezier(.4,.0,.2,1), top .42s cubic-bezier(.4,.0,.2,1), transform .12s ease, background .12s ease;';
+  document.body.appendChild(c);
+
+  const ring = document.createElement('div');
+  ring.id = '__agent_ring';
+  ring.style.cssText =
+    'position:fixed;pointer-events:none;width:36px;height:36px;border-radius:50%;'
+    +'border:2px solid rgba(255,120,25,0.9);'
+    +'transform:translate(-50%,-50%) scale(0);opacity:0;'
+    +'z-index:99998;'
+    +'transition:transform .42s ease-out, opacity .42s ease-out;'
+    +'left:50%;top:30%;';
+  document.body.appendChild(ring);
+}
+"""
+
+_CURSOR_MOVE_JS = (
+    "(p) => { const c=document.getElementById('__agent_cursor');"
+    " if(c){ c.style.left=p.x+'px'; c.style.top=p.y+'px'; }"
+    " const r=document.getElementById('__agent_ring');"
+    " if(r){ r.style.left=p.x+'px'; r.style.top=p.y+'px'; r.style.opacity='0';"
+    "        r.style.transform='translate(-50%,-50%) scale(0)'; }"
+    " }"
+)
+
+_CURSOR_PULSE_JS = (
+    "() => { const c=document.getElementById('__agent_cursor');"
+    " if(c){ c.style.transform='translate(-50%,-50%) scale(0.7)';"
+    "        c.style.background='rgba(250,200,0,0.95)'; }"
+    " const r=document.getElementById('__agent_ring');"
+    " if(r){ r.style.opacity='1'; r.style.transform='translate(-50%,-50%) scale(1.6)'; }"
+    " }"
+)
+
+_CURSOR_RESTORE_JS = (
+    "() => { const c=document.getElementById('__agent_cursor');"
+    " if(c){ c.style.transform='translate(-50%,-50%) scale(1)';"
+    "        c.style.background='rgba(255,120,25,0.85)'; } }"
+)
+
+
+async def _click_with_cursor(page: Page, selector: str, settle_s: float = 0.18) -> None:
+    """Animate the agent cursor toward `selector`, pulse, then click.
+
+    Falls back to a plain page.click() if the bounding box can't be resolved
+    (still emits a real click — we just skip the visual flourish).
+    """
+    try:
+        loc = page.locator(selector).first
+        await loc.scroll_into_view_if_needed(timeout=1500)
+        box = await loc.bounding_box()
+    except Exception:
+        await page.click(selector)
+        return
+    if not box:
+        await page.click(selector)
+        return
+    cx = box["x"] + box["width"] / 2
+    cy = box["y"] + box["height"] / 2
+    await page.evaluate(_CURSOR_MOVE_JS, {"x": cx, "y": cy})
+    # Let the CSS transition play out so the JPEG stream catches the motion.
+    await asyncio.sleep(0.42)
+    await page.evaluate(_CURSOR_PULSE_JS)
+    await asyncio.sleep(0.12)
+    await page.click(selector)
+    await asyncio.sleep(settle_s)
+    await page.evaluate(_CURSOR_RESTORE_JS)
+
+
 async def _stream_frames(page: Page, stop: asyncio.Event) -> None:
     """Publish one JPEG frame every FRAME_INTERVAL_S until stop is set."""
     while not stop.is_set():
@@ -217,11 +301,13 @@ async def book_hotel(
             await bus.publish("browser_status", status="loading", step="landing")
             await page.goto(url, wait_until="domcontentloaded")
             await page.wait_for_selector('[data-stage="landing"]:not([hidden])', timeout=5000)
+            await page.evaluate(_CURSOR_INJECT_JS)
             await asyncio.sleep(1.4)
 
             await bus.publish("browser_status", status="clicking", step="book-now")
-            await page.click("#book-now")
+            await _click_with_cursor(page, "#book-now")
             await page.wait_for_selector('[data-stage="details"]:not([hidden])', timeout=3000)
+            await page.evaluate(_CURSOR_INJECT_JS)  # re-inject after stage swap
             await asyncio.sleep(0.6)
 
             first, *rest = guest.split(" ")
@@ -235,12 +321,13 @@ async def book_hotel(
             await asyncio.sleep(0.5)
 
             await bus.publish("browser_status", status="clicking", step="continue")
-            await page.click("#continue")
+            await _click_with_cursor(page, "#continue")
             await page.wait_for_selector('[data-stage="payment"]:not([hidden])', timeout=3000)
+            await page.evaluate(_CURSOR_INJECT_JS)
             await asyncio.sleep(0.8)
 
             await bus.publish("browser_status", status="clicking", step="confirm-pay")
-            await page.click("#confirm-pay")
+            await _click_with_cursor(page, "#confirm-pay")
             await page.wait_for_selector('[data-stage="done"]:not([hidden])', timeout=5000)
             await asyncio.sleep(0.9)
 

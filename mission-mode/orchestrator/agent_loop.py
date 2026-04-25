@@ -5,7 +5,7 @@ Flow:
                     │
                     ▼
   agent_loop.run_turn(session, user_msg)
-    ├── emits SSE "user_message"
+    ├── (the dashboard adds the user bubble optimistically on Send)
     ├── loops calling anthropic.messages.stream until stop_reason != "tool_use"
     │     for each tool_use block, executes the tool and appends tool_result
     │     after `present_options` completes, flip phase → AWAITING_CONFIRMATION
@@ -21,7 +21,7 @@ import json
 import os
 from typing import Any
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from . import browser_agent, bunq_tools, image_gen, side_tools
 from .events import bus
@@ -33,13 +33,20 @@ def get_model() -> str:
     return os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 
 
-_client: Anthropic | None = None
+_client: AsyncAnthropic | None = None
 
 
-def anthropic_client() -> Anthropic:
+def anthropic_client() -> AsyncAnthropic:
+    """Async client so the SSE writer can interleave with token streaming.
+
+    The sync Anthropic client blocks the asyncio event loop between chunks,
+    which makes our /events SSE feed buffer until the full reply lands. The
+    async client uses httpx.AsyncClient under the hood, so token deltas
+    actually flush to the dashboard as they arrive.
+    """
     global _client
     if _client is None:
-        _client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        _client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     return _client
 
 
@@ -47,12 +54,30 @@ def anthropic_client() -> Anthropic:
 # Tool dispatch: runs the server-side function for each tool_use block
 # ---------------------------------------------------------------------------
 
+_BUNQ_MUTATING = {
+    "create_sub_account",
+    "fund_sub_account",
+    "pay_vendor",
+    "create_draft_payment",
+    "schedule_recurring",
+    "request_from_partner",
+}
+
+
 async def dispatch_tool(session: Session, name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
     """Execute a tool call, return the tool_result content."""
     await bus.publish("tool_call", name=name, status="firing", input=tool_input)
     try:
         result = await _execute_tool(session, name, tool_input)
         await bus.publish("tool_call", name=name, status="ok", result=result)
+        # Refresh the dashboard's primary balance after every mutating bunq tool
+        # so the user sees the money move.
+        if name in _BUNQ_MUTATING:
+            try:
+                snap = await asyncio.to_thread(bunq_tools.snapshot_primary_balance, name)
+                await bus.publish("balance_snapshot", **snap)
+            except Exception as e:  # noqa: BLE001
+                print(f"[agent_loop] balance snapshot after {name} failed: {e}", flush=True)
         return result
     except Exception as e:
         err = {"error": str(e), "tool": name}
@@ -164,8 +189,10 @@ async def _execute_tool(session: Session, name: str, args: dict[str, Any]) -> di
         return out
 
     if name == "narrate":
-        await bus.publish("narration", text=args["text"])
-        return {"narrated": args["text"]}
+        text = args["text"]
+        await bus.publish("narration", text=text)
+        session.narrations.append(text)
+        return {"narrated": text}
 
     raise RuntimeError(f"Unknown tool: {name}")
 
@@ -181,8 +208,10 @@ async def run_turn(session: Session, user_message: str) -> None:
     """Execute one conversational turn, possibly with many tool calls.
 
     After user sends the confirmation "yes", we flip phase → EXECUTING here.
+
+    Note: the dashboard adds the user's bubble optimistically on Send, so we
+    do NOT publish a user_message event here — that would double-render.
     """
-    await bus.publish("user_message", text=user_message)
     session.messages.append({"role": "user", "content": user_message})
 
     # Confirmation gate
@@ -213,8 +242,8 @@ async def run_turn(session: Session, user_message: str) -> None:
 
         try:
             client = anthropic_client()
-            with client.messages.stream(**stream_kwargs) as stream:
-                for event in stream:
+            async with client.messages.stream(**stream_kwargs) as stream:
+                async for event in stream:
                     etype = getattr(event, "type", None)
                     if etype == "content_block_start":
                         block = event.content_block
@@ -233,7 +262,7 @@ async def run_turn(session: Session, user_message: str) -> None:
                             if assistant_content and assistant_content[-1].get("type") == "text":
                                 assistant_content[-1]["text"] += delta.text
                     elif etype == "message_stop":
-                        msg = stream.get_final_message()
+                        msg = await stream.get_final_message()
                         stop_reason = msg.stop_reason
                         # Rebuild assistant_content from the final message, stripping fields
                         # that the API rejects on reentry (e.g. `text` on server_tool_use).
@@ -287,6 +316,19 @@ async def run_turn(session: Session, user_message: str) -> None:
     else:
         await bus.publish("agent_error", error=f"Hit MAX_ITERATIONS={MAX_ITERATIONS}")
 
+    # Mission wrap: once the model is done streaming and we're in DONE, generate
+    # a fresh closing line so the demo never sounds canned across rehearsals.
+    if session.phase == Phase.DONE and not session.closing_line_emitted:
+        session.closing_line_emitted = True
+        try:
+            closing = await _generate_closing_line(session.narrations)
+        except Exception as e:  # noqa: BLE001
+            print(f"[agent_loop] closing line generation failed: {e}", flush=True)
+            closing = ""
+        if closing:
+            await bus.publish("narration", text=closing)
+            session.narrations.append(closing)
+
 
 def _clean_block(block: dict[str, Any]) -> dict[str, Any]:
     """Strip fields the API rejects when we replay assistant content on reentry."""
@@ -328,6 +370,35 @@ def _is_yes(text: str) -> bool:
         return False
     positive = {"yes", "y", "go", "confirm", "do it", "ok", "okay", "sure", "yep", "yeah", "proceed", "let's go", "approve"}
     return any(t == p or t.startswith(p + " ") or p in t for p in positive)
+
+
+async def _generate_closing_line(prior_narrations: list[str]) -> str:
+    """One short, fresh wrap-up sentence in the agent's voice.
+
+    Spends ~80 tokens of Haiku per mission to avoid the canned "Mission complete"
+    sound. References the last few narrations so it lands as a real follow-through
+    rather than a generic outro.
+    """
+    bullets = "\n".join(f"- {n}" for n in prior_narrations[-4:]) or "(none)"
+    prompt = (
+        "You just finished helping a friend plan and book a weekend trip. Say goodbye "
+        "in one short sentence — 8 to 14 words, warm, conversational, present tense. "
+        "End with a small well-wish that fits the moment ('have fun', 'enjoy the canals', "
+        "'go pack', etc).\n\n"
+        "Plain words only. NEVER say 'executing', 'processing', 'transaction', 'kindly', "
+        "or anything a corporate IVR would say. No quote marks, no emoji.\n\n"
+        f"Earlier things you said this run:\n{bullets}\n\n"
+        "Reply with EXACTLY one short sentence ending with a period. "
+        "Don't reuse phrasing from earlier lines."
+    )
+    client = anthropic_client()
+    resp = await client.messages.create(
+        model=get_model(),
+        max_tokens=80,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+    return text.strip('"').strip("'")
 
 
 async def _generate_and_publish_image(opt: dict[str, Any]) -> None:

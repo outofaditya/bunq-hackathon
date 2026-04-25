@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatEntry, Phase, PackageOption } from "./types";
 import MarkdownText from "./markdown";
+import { audioQueue } from "./audio-fx";
 
 type Props = {
   entries: ChatEntry[];
@@ -35,6 +36,9 @@ export default function Chat({ entries, phase, onSend, onSelectOption, onConfirm
       setRecording(false);
       return;
     }
+    // Fire a short opening line so the agent feels reactive instead of silent.
+    // Uses the shared audioQueue so it doesn't overlap with later narrations.
+    try { audioQueue.enqueue("/tts/opening?_=" + Date.now()); } catch {}
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream);
