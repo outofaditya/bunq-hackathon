@@ -1,10 +1,10 @@
 """Browser agent — Claude Vision drives Playwright Chromium against local
-mock booking flows. One generic engine + task-specific wrappers.
+mock booking flows + a visible web-search beat.
 
-Tasks supported:
-  - book_restaurant_via_browser   (Weekend mission)
-  - book_hotel_via_browser        (Travel mission)
-  - subscribe_to_service_via_browser (Payday mission)
+Tasks:
+  - book_hotel_via_browser   (Trip mission, EXECUTE phase)
+  - search_trip_options      (Trip mission, RESEARCH phase — DDG via httpx +
+                              animated TripLens render via Playwright)
 
 Hardened for stage demo:
   - Hard step cap so a confused agent never loops forever.
@@ -282,87 +282,7 @@ async def _drive_booking_flow(
 
 
 # ----------------------------------------------------------------------
-# Task 1: book a restaurant (Weekend)
-# ----------------------------------------------------------------------
-
-_RESTAURANT_SYSTEM = """\
-You are a browser agent driving a real Chromium against a restaurant-booking site.
-
-# Goal
-Book a table that matches the user's preferences for {when}. Stay at or under €{max_budget}.
-User hint: "{restaurant_hint}"
-
-# Site flow (3 screens)
-1. Browse — list of restaurants with photo, name, cuisine, "Book €N" button
-2. Pick a time — restaurant detail, time-slot grid, "Continue to confirmation" button
-3. Confirm — summary card, "Confirm booking" button, then a confirmation screen
-
-# Action rules
-- One screenshot at a time. Examine the latest screenshot, decide one tool call.
-- To navigate, use click_text with the EXACT visible text on a button/element.
-- The booking is final only after the confirmation screen shows "Booking confirmed" with a reference.
-- When you see the confirmation screen, call `complete` with the observed details.
-
-# Budget
-Pick the cheapest restaurant matching the hint within budget. Tie-break: higher rating.
-"""
-
-_RESTAURANT_COMPLETE_TOOL = {
-    "name": "complete",
-    "description": (
-        "Call when the booking is confirmed. Provide the observed restaurant name, "
-        "total EUR, time slot, and reference id."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "restaurant_name": {"type": "string"},
-            "price_eur": {"type": "number"},
-            "time_slot": {"type": "string"},
-            "reference": {"type": "string"},
-        },
-        "required": ["restaurant_name", "price_eur"],
-    },
-}
-
-_RESTAURANT_SCRAPE_JS = (
-    "() => ({ "
-    "  status: document.body.dataset.bookingStatus || '',"
-    "  restaurant_name: document.body.dataset.bookingRestaurant || '',"
-    "  price_eur: parseFloat(document.body.dataset.bookingPrice || '0') || 0,"
-    "  reference: document.body.dataset.bookingRef || '',"
-    "  time_slot: document.body.dataset.bookingTime || '' "
-    "})"
-)
-
-
-async def book_restaurant_via_browser(
-    restaurant_hint: str,
-    max_budget: float,
-    when: str,
-    base_url: str,
-    max_steps: int = 12,
-    model: str | None = None,
-) -> dict[str, Any]:
-    return await _drive_booking_flow(
-        base_url=base_url,
-        system_prompt=_RESTAURANT_SYSTEM.format(when=when, max_budget=max_budget, restaurant_hint=restaurant_hint),
-        complete_tool=_RESTAURANT_COMPLETE_TOOL,
-        scrape_js=_RESTAURANT_SCRAPE_JS,
-        confirmed_check="s.get('status') == 'confirmed'",
-        success_event_label="browser_complete",
-        started_event_label="browser_started",
-        started_event_data={
-            "site": base_url, "task": "book_restaurant",
-            "restaurant_hint": restaurant_hint, "max_budget": max_budget, "when": when,
-        },
-        max_steps=max_steps,
-        model=model,
-    )
-
-
-# ----------------------------------------------------------------------
-# Task 2: book a hotel (Travel)
+# Task: book a hotel (Trip mission)
 # ----------------------------------------------------------------------
 
 _HOTEL_SYSTEM = """\
@@ -436,77 +356,6 @@ async def book_hotel_via_browser(
     )
 
 
-# ----------------------------------------------------------------------
-# Task 3: subscribe to a service (Payday)
-# ----------------------------------------------------------------------
-
-_SUB_SYSTEM = """\
-You are a browser agent driving a real Chromium against a subscription comparison site.
-
-# Goal
-Pick the cheapest plan in the "{category}" category that costs at most €{max_monthly} per month.
-
-# Site flow (2 screens)
-1. Browse — grid of plans with provider, plan name, monthly price, "Subscribe €N/mo" button
-2. Confirm — summary card, "Confirm subscription" button, then confirmation screen
-
-# Action rules
-- One screenshot at a time. Use click_text with the EXACT visible button text.
-- The subscription is final only after "Subscription active" appears with a reference.
-- When you see the confirmation, call `complete` with the observed details.
-
-# Budget
-Pick the cheapest plan within budget. Tie-break: longest list of features.
-"""
-
-_SUB_COMPLETE_TOOL = {
-    "name": "complete",
-    "description": "Call when the subscription confirmation screen is showing. Provide service name, plan, monthly EUR, and reference.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "service_name": {"type": "string"},
-            "plan": {"type": "string"},
-            "monthly_eur": {"type": "number"},
-            "reference": {"type": "string"},
-        },
-        "required": ["service_name", "monthly_eur"],
-    },
-}
-
-_SUB_SCRAPE_JS = (
-    "() => ({ "
-    "  status: document.body.dataset.subscriptionStatus || '',"
-    "  service_name: document.body.dataset.subscriptionService || '',"
-    "  plan: document.body.dataset.subscriptionPlan || '',"
-    "  monthly_eur: parseFloat(document.body.dataset.subscriptionMonthly || '0') || 0,"
-    "  reference: document.body.dataset.subscriptionRef || '' "
-    "})"
-)
-
-
-async def subscribe_to_service_via_browser(
-    category: str,
-    max_monthly_eur: float,
-    base_url: str,
-    max_steps: int = 12,
-    model: str | None = None,
-) -> dict[str, Any]:
-    return await _drive_booking_flow(
-        base_url=base_url,
-        system_prompt=_SUB_SYSTEM.format(category=category, max_monthly=max_monthly_eur),
-        complete_tool=_SUB_COMPLETE_TOOL,
-        scrape_js=_SUB_SCRAPE_JS,
-        confirmed_check="s.get('status') == 'active'",
-        success_event_label="browser_complete",
-        started_event_label="browser_started",
-        started_event_data={
-            "site": base_url, "task": "subscribe_to_service",
-            "category": category, "max_monthly_eur": max_monthly_eur,
-        },
-        max_steps=max_steps,
-        model=model,
-    )
 
 
 # ============================================================================
