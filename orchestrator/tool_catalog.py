@@ -173,6 +173,24 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "book_restaurant",
+        "description": (
+            "Have a real browser-agent navigate a restaurant-booking site (Playwright + Claude Vision) "
+            "and complete a real reservation. Returns the actual confirmed price, restaurant name, "
+            "time slot, and reference. Use this for the dinner step BEFORE calling pay_vendor — pay "
+            "the returned price to the returned restaurant_name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "restaurant_hint": {"type": "string", "description": "Cuisine or vibe hint, e.g. 'italian', 'cozy dutch', 'rooftop'."},
+                "max_budget_eur": {"type": "number"},
+                "when": {"type": "string", "description": "When to book, e.g. 'Friday 19:30'."},
+            },
+            "required": ["restaurant_hint", "max_budget_eur", "when"],
+        },
+    },
+    {
         "name": "narrate",
         "description": (
             "Speak a one-line summary to the user via TTS. Use AT MOST once per step so the demo "

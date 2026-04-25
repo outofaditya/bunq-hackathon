@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TheTable · Book a Restaurant</title>
+<style>
+  :root {
+    --bg: #f6efe8;
+    --ink: #1a2025;
+    --muted: #6e7682;
+    --accent: #e84a4a;
+    --accent-2: #ffb24d;
+    --card: #fff;
+    --line: #e7dfd5;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font: 16px/1.5 "SF Pro Display", "Inter", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  header {
+    padding: 24px 40px;
+    background: var(--card);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  header .logo {
+    font: 700 24px/1 "SF Pro Display", system-ui;
+    letter-spacing: -0.02em;
+  }
+  header .logo span { color: var(--accent); }
+  header .tag {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  main {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+  }
+  h1 {
+    font: 700 36px/1.1 "SF Pro Display", system-ui;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+  }
+  .subtitle { color: var(--muted); font-size: 16px; margin: 0 0 32px; }
+
+  /* Restaurant list */
+  .restaurants {
+    display: grid;
+    gap: 16px;
+  }
+  .restaurant {
+    background: var(--card);
+    border-radius: 18px;
+    padding: 24px;
+    display: grid;
+    grid-template-columns: 96px 1fr auto;
+    gap: 24px;
+    align-items: center;
+    border: 1px solid var(--line);
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .restaurant:hover { transform: translateY(-2px); box-shadow: 0 18px 40px -20px rgba(0,0,0,0.25); }
+  .restaurant .photo {
+    width: 96px;
+    height: 96px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    font-size: 44px;
+    background: linear-gradient(135deg, #fce6c8, #f4c89c);
+  }
+  .restaurant .name { font: 600 22px/1.2 "SF Pro Display", system-ui; letter-spacing: -0.01em; }
+  .restaurant .meta { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .restaurant .price { color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: 0.02em; }
+  .btn {
+    background: var(--accent);
+    color: #fff;
+    border: 0;
+    border-radius: 999px;
+    padding: 12px 24px;
+    font: 600 15px/1 system-ui;
+    cursor: pointer;
+    transition: filter 0.15s, transform 0.05s;
+  }
+  .btn:hover { filter: brightness(1.05); }
+  .btn:active { transform: translateY(1px); }
+  .btn.secondary { background: var(--ink); }
+  .btn.ghost {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--line);
+  }
+  .btn-row { display: flex; gap: 12px; margin-top: 24px; }
+
+  /* Detail screen */
+  .detail-card {
+    background: var(--card);
+    border-radius: 22px;
+    padding: 32px;
+    border: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 32px;
+    align-items: start;
+    margin-bottom: 24px;
+  }
+  .detail-card .photo {
+    width: 160px;
+    height: 160px;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    font-size: 72px;
+    background: linear-gradient(135deg, #fce6c8, #f4c89c);
+  }
+  .detail-card h2 { margin: 0 0 6px; font: 700 28px/1.1 "SF Pro Display", system-ui; letter-spacing: -0.01em; }
+  .detail-card .meta { color: var(--muted); font-size: 14px; margin-bottom: 12px; }
+  .detail-card .price-line { font-size: 16px; }
+  .detail-card .price-line b { color: var(--accent); font-size: 20px; }
+
+  .slots {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .slot {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .slot:hover { border-color: var(--accent); }
+  .slot.selected {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .slot .day { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .slot.selected .day { color: rgba(255,255,255,0.85); }
+  .slot .time { font: 700 22px/1 "SF Pro Display", system-ui; letter-spacing: -0.01em; }
+
+  /* Confirm screen */
+  .confirm-summary {
+    background: var(--card);
+    border-radius: 22px;
+    padding: 32px;
+    border: 1px solid var(--line);
+    margin-bottom: 24px;
+  }
+  .confirm-summary h2 { font: 700 24px/1.2 system-ui; margin: 0 0 16px; letter-spacing: -0.01em; }
+  .summary-row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .summary-row:last-child { border-bottom: 0; }
+  .summary-row .k { color: var(--muted); }
+  .summary-row .v { font-weight: 600; }
+  .total-row { padding-top: 18px; }
+  .total-row .k { font-weight: 700; font-size: 16px; }
+  .total-row .v { font-size: 24px; color: var(--accent); font-weight: 700; }
+
+  /* Done screen */
+  .done-card {
+    background: var(--card);
+    border-radius: 22px;
+    padding: 48px;
+    border: 1px solid var(--line);
+    text-align: center;
+  }
+  .done-card .check {
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 18px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-size: 38px;
+    font-weight: 700;
+  }
+  .done-card h2 { font: 700 28px/1.2 "SF Pro Display", system-ui; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .done-card p { color: var(--muted); margin: 0 0 16px; }
+  .done-total {
+    font: 700 38px/1 "SF Pro Display", system-ui;
+    color: var(--accent);
+    margin: 16px 0 4px;
+    letter-spacing: -0.02em;
+  }
+  .ref-badge {
+    display: inline-block;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    padding: 8px 16px;
+    border-radius: 999px;
+    font: 500 13px/1 ui-monospace, monospace;
+    color: var(--muted);
+    margin-top: 12px;
+  }
+
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">The<span>Table</span></div>
+  <div class="tag" id="screen-tag">Browse</div>
+</header>
+
+<main>
+  <!-- Screen 1: Restaurant list -->
+  <section id="screen-list">
+    <h1>Tonight's Restaurants</h1>
+    <p class="subtitle">Hand-picked tables in Amsterdam · Available Friday evening</p>
+    <div class="restaurants" id="restaurants"></div>
+  </section>
+
+  <!-- Screen 2: Restaurant detail / time picker -->
+  <section id="screen-detail" class="hidden">
+    <button class="btn ghost" id="btn-back-list" style="margin-bottom: 18px;">← Back to restaurants</button>
+    <div class="detail-card">
+      <div class="photo" id="d-photo">🍴</div>
+      <div>
+        <h2 id="d-name">…</h2>
+        <div class="meta" id="d-meta">…</div>
+        <div class="price-line">Average dinner: <b id="d-price">€--</b> per person</div>
+      </div>
+    </div>
+    <h2 style="font-size: 18px; margin: 24px 0 12px;">Pick a time slot for Friday</h2>
+    <div class="slots" id="slots"></div>
+    <div class="btn-row">
+      <button class="btn secondary" id="btn-continue" disabled>Continue to confirmation</button>
+    </div>
+  </section>
+
+  <!-- Screen 3: Confirm -->
+  <section id="screen-confirm" class="hidden">
+    <button class="btn ghost" id="btn-back-detail" style="margin-bottom: 18px;">← Back</button>
+    <div class="confirm-summary">
+      <h2>Confirm your booking</h2>
+      <div class="summary-row"><span class="k">Restaurant</span><span class="v" id="c-name">…</span></div>
+      <div class="summary-row"><span class="k">Date · Time</span><span class="v" id="c-time">Friday, --:--</span></div>
+      <div class="summary-row"><span class="k">Party size</span><span class="v">2 guests</span></div>
+      <div class="summary-row total-row"><span class="k">Total</span><span class="v" id="c-total">€--</span></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="btn-confirm">Confirm booking</button>
+    </div>
+  </section>
+
+  <!-- Screen 4: Done -->
+  <section id="screen-done" class="hidden">
+    <div class="done-card">
+      <div class="check">✓</div>
+      <h2>Booking confirmed</h2>
+      <p>Your table is reserved. We've emailed the details.</p>
+      <div class="meta" style="font-size:14px;color:var(--muted)">Total charged</div>
+      <div class="done-total" id="done-total">€--</div>
+      <div class="meta" style="font-size:14px;color:var(--muted)" id="done-line">…</div>
+      <div class="ref-badge" id="done-ref">REF: ……</div>
+    </div>
+  </section>
+</main>
+
+<script>
+const RESTAURANTS = [
+  { id: "klos",  name: "Café de Klos",   emoji: "🥩", cuisine: "Dutch grill · cozy",                  price: 85,  meta: "Reguliersdwarsstraat · 4.6★ · ~ 75 min" },
+  { id: "perla", name: "La Perla",       emoji: "🍕", cuisine: "Italian · wood-fired pizza & rooftop", price: 92,  meta: "Jordaan · 4.7★ · ~ 90 min" },
+  { id: "sora",  name: "Sushi Sora",     emoji: "🍣", cuisine: "Japanese omakase · counter seats",     price: 78,  meta: "De Pijp · 4.5★ · ~ 60 min" },
+  { id: "zaza",  name: "Zaza Rooftop",   emoji: "🍷", cuisine: "Mediterranean · rooftop views",        price: 110, meta: "Westerpark · 4.4★ · ~ 90 min" }
+];
+
+const SLOTS = [
+  { id: "1830", day: "Friday", time: "18:30" },
+  { id: "1900", day: "Friday", time: "19:00" },
+  { id: "1930", day: "Friday", time: "19:30" },
+  { id: "2000", day: "Friday", time: "20:00" },
+  { id: "2030", day: "Friday", time: "20:30" }
+];
+
+const $ = (id) => document.getElementById(id);
+const screens = ["screen-list", "screen-detail", "screen-confirm", "screen-done"];
+const TAGS    = { "screen-list": "Browse", "screen-detail": "Pick a time", "screen-confirm": "Confirm", "screen-done": "Done" };
+const state = { restaurant: null, slot: null };
+
+function show(id) {
+  screens.forEach(s => document.getElementById(s).classList.toggle("hidden", s !== id));
+  $("screen-tag").textContent = TAGS[id] || "";
+}
+
+function fmtEur(v) { return "€" + Number(v).toFixed(0); }
+
+function renderList() {
+  const root = $("restaurants");
+  root.innerHTML = "";
+  for (const r of RESTAURANTS) {
+    const el = document.createElement("div");
+    el.className = "restaurant";
+    el.innerHTML = `
+      <div class="photo">${r.emoji}</div>
+      <div>
+        <div class="name">${r.name}</div>
+        <div class="meta">${r.cuisine}</div>
+        <div class="meta">${r.meta}</div>
+        <div class="price" style="margin-top:8px">From ${fmtEur(r.price)}</div>
+      </div>
+      <button class="btn" data-pick="${r.id}">Book ${fmtEur(r.price)}</button>
+    `;
+    el.querySelector("[data-pick]").addEventListener("click", () => pickRestaurant(r));
+    root.appendChild(el);
+  }
+}
+
+function renderSlots() {
+  const root = $("slots");
+  root.innerHTML = "";
+  for (const s of SLOTS) {
+    const el = document.createElement("div");
+    el.className = "slot" + (state.slot && state.slot.id === s.id ? " selected" : "");
+    el.dataset.slot = s.id;
+    el.innerHTML = `<div class="day">${s.day}</div><div class="time">${s.time}</div>`;
+    el.addEventListener("click", () => pickSlot(s));
+    root.appendChild(el);
+  }
+}
+
+function pickRestaurant(r) {
+  state.restaurant = r;
+  state.slot = null;
+  $("d-photo").textContent = r.emoji;
+  $("d-name").textContent = r.name;
+  $("d-meta").textContent = r.cuisine + " · " + r.meta;
+  $("d-price").textContent = fmtEur(r.price);
+  renderSlots();
+  $("btn-continue").disabled = true;
+  show("screen-detail");
+}
+
+function pickSlot(s) {
+  state.slot = s;
+  renderSlots();
+  $("btn-continue").disabled = false;
+}
+
+function gotoConfirm() {
+  if (!state.restaurant || !state.slot) return;
+  $("c-name").textContent = state.restaurant.name;
+  $("c-time").textContent = `${state.slot.day}, ${state.slot.time}`;
+  $("c-total").textContent = fmtEur(state.restaurant.price);
+  show("screen-confirm");
+}
+
+function confirmBooking() {
+  const ref = "TT-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+  $("done-total").textContent = fmtEur(state.restaurant.price);
+  $("done-line").textContent = `${state.restaurant.name} · ${state.slot.day} ${state.slot.time}`;
+  $("done-ref").textContent = "REF: " + ref;
+  // Expose for the browser-agent to scrape via DOM
+  document.body.setAttribute("data-booking-status", "confirmed");
+  document.body.setAttribute("data-booking-restaurant", state.restaurant.name);
+  document.body.setAttribute("data-booking-price", String(state.restaurant.price));
+  document.body.setAttribute("data-booking-ref", ref);
+  document.body.setAttribute("data-booking-time", `${state.slot.day} ${state.slot.time}`);
+  show("screen-done");
+}
+
+$("btn-back-list").addEventListener("click", () => show("screen-list"));
+$("btn-back-detail").addEventListener("click", () => show("screen-detail"));
+$("btn-continue").addEventListener("click", gotoConfirm);
+$("btn-confirm").addEventListener("click", confirmBooking);
+
+renderList();
+show("screen-list");
+</script>
+</body>
+</html>

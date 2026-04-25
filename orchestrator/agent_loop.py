@@ -13,6 +13,9 @@ from typing import Any, Callable
 
 import anthropic
 
+import asyncio
+
+from .browser_agent import book_restaurant_via_browser
 from .bunq_tools import BunqToolbox
 from .events import bus
 from .tool_catalog import BUNQ_TOOLS
@@ -47,6 +50,29 @@ def _dispatch_bunq(toolbox: BunqToolbox, name: str, args: dict[str, Any]) -> dic
         return fn(**args)
     except Exception as e:  # noqa: BLE001
         bus.publish("step_error", {"tool": name, "error": str(e)})
+        return {"error": str(e)}
+
+
+def _dispatch_browser(args: dict[str, Any]) -> dict[str, Any]:
+    """Run the async browser agent from inside the synchronous agent loop."""
+    base_url = os.getenv("MOCK_RESTAURANT_URL", "http://localhost:8000/mock-restaurant/").strip()
+    bus.publish("step_started", {
+        "tool": "book_restaurant",
+        "restaurant_hint": args.get("restaurant_hint"),
+        "max_budget_eur": args.get("max_budget_eur"),
+        "when": args.get("when"),
+    })
+    try:
+        result = asyncio.run(book_restaurant_via_browser(
+            restaurant_hint=str(args.get("restaurant_hint", "")),
+            max_budget=float(args.get("max_budget_eur", 100)),
+            when=str(args.get("when", "Friday 19:30")),
+            base_url=base_url,
+        ))
+        bus.publish("step_finished", {"tool": "book_restaurant", "result": result})
+        return result
+    except Exception as e:  # noqa: BLE001
+        bus.publish("step_error", {"tool": "book_restaurant", "error": str(e)})
         return {"error": str(e)}
 
 
@@ -145,6 +171,15 @@ def run_mission(
                 stop_now = True
                 continue
 
+            if name == "book_restaurant":
+                result = _dispatch_browser(args)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps(result, default=str),
+                })
+                continue
+
             result = _dispatch_bunq(toolbox, name, args)
             if name == "create_draft_payment" and "draft_id" in result:
                 last_draft_id = result["draft_id"]
@@ -174,6 +209,26 @@ def run_mission(
             toolbox.snapshot_balance(step_label=f"draft_{status.lower()}")
         except Exception as e:  # noqa: BLE001
             bus.publish("balance_snapshot_error", {"step": "draft_resolved", "error": str(e)})
+
+        # Closing narrative — fires AFTER the human-in-the-loop step.
+        if status == "ACCEPTED":
+            closing = (
+                "Tickets approved and paid. Mission fully wrapped. "
+                "Have a great weekend."
+            )
+        elif status == "REJECTED":
+            closing = "Tickets rejected. Money stays with you. The rest of the plan is locked in."
+        else:
+            closing = "Tickets still pending. Approve from your phone whenever you're ready."
+
+        bus.publish("narrate", {"text": closing})
+        narrations.append(closing)
+        try:
+            audio_filename = synthesize_narration(closing)
+            bus.publish("narrate_audio", {"text": closing, "url": f"/tts/{audio_filename}"})
+        except Exception as e:  # noqa: BLE001
+            bus.publish("narrate_audio_error", {"text": closing, "error": str(e)})
+        bus.publish("mission_finalized", {"status": status, "summary": closing})
 
     return {
         "final_summary": final_summary,

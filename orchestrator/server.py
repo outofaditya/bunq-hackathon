@@ -40,6 +40,7 @@ from .agent_loop import run_mission
 from .bunq_tools import BunqToolbox
 from .events import bus
 from .missions import MISSIONS
+from .places import search_restaurants
 from .stt import transcribe_bytes, transcribe_file
 
 
@@ -50,6 +51,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_HTML = PROJECT_ROOT / "dashboard" / "index.html"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 TTS_CACHE_DIR = ASSETS_DIR / "tts_cache"
+MOCK_SITES_DIR = PROJECT_ROOT / "mock_sites"
 
 
 # ----------------------------------------------------------------------
@@ -267,6 +269,52 @@ async def serve_asset(filename: str) -> FileResponse:
         return FileResponse(str(ASSETS_DIR / "missing"))
     media_type = "audio/mpeg" if filename.endswith(".mp3") else "application/octet-stream"
     return FileResponse(str(p), media_type=media_type)
+
+
+# Real-data booking site — restaurants come from Google Places API (or a
+# hardcoded fallback if no key is set). The browser-agent navigates this
+# page; you can also open it directly in a browser at /mock-restaurant/.
+_RESTAURANT_HTML_TEMPLATE: str | None = None
+
+
+def _restaurant_html() -> str:
+    global _RESTAURANT_HTML_TEMPLATE
+    if _RESTAURANT_HTML_TEMPLATE is None:
+        _RESTAURANT_HTML_TEMPLATE = (MOCK_SITES_DIR / "restaurant" / "index.html").read_text()
+    return _RESTAURANT_HTML_TEMPLATE
+
+
+def _inject_restaurant_data(query: str = "popular dinner restaurants Amsterdam") -> str:
+    """Render the booking page with live Google Places data injected.
+
+    Replaces the in-page `RESTAURANTS = [...]` literal with a fresh array.
+    """
+    import json as _json
+
+    html = _restaurant_html()
+    restaurants = search_restaurants(query=query, max_results=4)
+
+    # Build the JS array literal that replaces the hardcoded one in the page.
+    js_array = _json.dumps(restaurants, ensure_ascii=False)
+    # The original line in index.html starts with "const RESTAURANTS = ["
+    # and is multiline. Replace from `const RESTAURANTS = [` through the
+    # closing `];` on a line by itself.
+    import re as _re
+
+    pattern = _re.compile(r"const RESTAURANTS = \[[\s\S]*?\];", _re.MULTILINE)
+    replacement = f"const RESTAURANTS = {js_array};"
+    if not pattern.search(html):
+        return html  # nothing matched — fall back to the static page
+    return pattern.sub(replacement, html, count=1)
+
+
+@app.get("/mock-restaurant/")
+@app.get("/mock-restaurant")
+async def mock_restaurant_index(query: str | None = None) -> Any:
+    from fastapi.responses import HTMLResponse
+
+    rendered = _inject_restaurant_data(query=query or "popular dinner restaurants Amsterdam")
+    return HTMLResponse(rendered)
 
 
 # ----- bunq webhook receiver ------------------------------------------
