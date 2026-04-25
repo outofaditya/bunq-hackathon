@@ -11,46 +11,6 @@ from typing import Any
 
 BUNQ_TOOLS: list[dict[str, Any]] = [
     {
-        "name": "create_sub_account",
-        "description": (
-            "Create a new bunq current (bank) sub-account with an emoji-tagged name. The sub-account "
-            "becomes the 'current mission account' for subsequent payments, drafts, bunqme links "
-            "and requests. For multi-account missions, pass a short `alias` (e.g. 'rent', 'tokyo') "
-            "to address it later via fund_sub_account."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "User-facing description, emoji welcome. e.g. '🌹 Sara Weekend'.",
-                },
-                "alias": {
-                    "type": "string",
-                    "description": "Optional short key for multi-sub missions (e.g. 'rent').",
-                },
-            },
-            "required": ["name"],
-        },
-    },
-    {
-        "name": "fund_sub_account",
-        "description": (
-            "Transfer EUR from the user's primary account to a sub-account. If `target_alias` is "
-            "omitted, funds the most-recently-created sub-account. Use this for the initial funding "
-            "of a mission, or after create_sub_account with an alias for a multi-sub flow."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "amount_eur": {"type": "number"},
-                "target_alias": {"type": "string", "description": "Alias from create_sub_account; omit to target the current mission sub-account."},
-                "description": {"type": "string"},
-            },
-            "required": ["amount_eur"],
-        },
-    },
-    {
         "name": "pay_vendor",
         "description": (
             "Send an immediate payment from the current mission sub-account to a vendor. Use for "
@@ -90,23 +50,23 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
     {
         "name": "schedule_recurring_payment",
         "description": (
-            "Create a recurring scheduled transfer from primary to a sub-account. Use for standing "
-            "orders like 'save 50 EUR every Friday' or 'pay 1200 EUR rent every month'."
+            "Create a recurring scheduled outgoing payment from primary to a counterparty (vendor "
+            "by email). Use for standing orders like 'pay €1200 rent to landlord every month' or "
+            "'pay €15 streaming every month'. counterparty_name is the human-readable label "
+            "(e.g. 'Landlord'); counterparty_email defaults to sugardaddy@bunq.com in sandbox."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "amount_eur": {"type": "number"},
                 "description": {"type": "string"},
-                "recurrence_unit": {
-                    "type": "string",
-                    "enum": ["DAILY", "WEEKLY", "MONTHLY"],
-                },
+                "recurrence_unit": {"type": "string", "enum": ["DAILY", "WEEKLY", "MONTHLY"]},
                 "recurrence_size": {"type": "integer", "minimum": 1},
                 "days_from_now": {"type": "integer", "minimum": 0},
-                "target_alias": {"type": "string"},
+                "counterparty_email": {"type": "string"},
+                "counterparty_name": {"type": "string"},
             },
-            "required": ["amount_eur", "description", "recurrence_unit"],
+            "required": ["amount_eur", "description", "recurrence_unit", "counterparty_name"],
         },
     },
     {
@@ -144,24 +104,10 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "update_sub_account",
-        "description": (
-            "Update the current mission sub-account's description. Use to mark a mission complete "
-            "('🌹 Sara Weekend — done!')."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "new_description": {"type": "string"},
-            },
-            "required": ["new_description"],
-        },
-    },
-    {
         "name": "set_card_status",
         "description": (
-            "Freeze (DEACTIVATED) or unfreeze (ACTIVE) a bunq card by id. Use for Travel Mode to "
-            "freeze the home card before a trip."
+            "Freeze (DEACTIVATED) or unfreeze (ACTIVE) a bunq card by id. Use only when you "
+            "already know a specific card_id. Otherwise call `freeze_home_card` / `unfreeze_home_card`."
         ),
         "input_schema": {
             "type": "object",
@@ -171,6 +117,19 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
             },
             "required": ["card_id", "status"],
         },
+    },
+    {
+        "name": "freeze_home_card",
+        "description": (
+            "Freeze the user's primary card (auto-finds the first active one). Use for Travel Mode "
+            "to lock the home card before a trip — protects against fraud abroad."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "unfreeze_home_card",
+        "description": "Re-activate the user's primary card after a trip.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "book_restaurant",
@@ -223,6 +182,40 @@ BUNQ_TOOLS: list[dict[str, Any]] = [
                 "invitees": {"type": "array", "items": {"type": "string", "format": "email"}},
             },
             "required": ["title"],
+        },
+    },
+    {
+        "name": "book_hotel",
+        "description": (
+            "Have a real browser agent navigate a hotel-booking site (Playwright + Claude Vision) "
+            "and complete a real reservation. Returns the actual confirmed hotel name, total EUR, "
+            "nights, and reference. Use this for the lodging step BEFORE calling pay_vendor."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+                "nights": {"type": "integer", "minimum": 1, "maximum": 14},
+                "max_budget_eur": {"type": "number"},
+            },
+            "required": ["city", "nights", "max_budget_eur"],
+        },
+    },
+    {
+        "name": "subscribe_to_service",
+        "description": (
+            "Have a real browser agent navigate a subscription-comparison site (Playwright + Claude "
+            "Vision) and confirm a recurring plan in the given category. Returns the chosen "
+            "service_name, plan, monthly_eur, and reference. Use this BEFORE schedule_recurring_payment "
+            "so the recurring is set up for the actually-chosen plan."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "enum": ["streaming", "gym", "internet", "mobile"]},
+                "max_monthly_eur": {"type": "number"},
+            },
+            "required": ["category", "max_monthly_eur"],
         },
     },
     {

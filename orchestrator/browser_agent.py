@@ -1,10 +1,14 @@
-"""Browser agent — Claude Vision drives a real Playwright Chromium against
-the local mock restaurant site, navigates the booking flow, and returns the
-confirmed price. Screenshots stream to the dashboard via the SSE bus.
+"""Browser agent — Claude Vision drives Playwright Chromium against local
+mock booking flows. One generic engine + task-specific wrappers.
+
+Tasks supported:
+  - book_restaurant_via_browser   (Weekend mission)
+  - book_hotel_via_browser        (Travel mission)
+  - subscribe_to_service_via_browser (Payday mission)
 
 Hardened for stage demo:
   - Hard step cap so a confused agent never loops forever.
-  - DOM scrape (data-booking-* attributes) as the source of truth for price.
+  - DOM scrape (data-booking-* attributes) as the source of truth.
   - All Playwright I/O inside an `async with` so the browser is always closed.
 """
 
@@ -21,7 +25,11 @@ from playwright.async_api import Page, async_playwright
 from .events import bus
 
 
-VISION_TOOLS: list[dict[str, Any]] = [
+# ----------------------------------------------------------------------
+# Shared navigation primitives
+# ----------------------------------------------------------------------
+
+_BASE_TOOLS: list[dict[str, Any]] = [
     {
         "name": "click_text",
         "description": (
@@ -43,28 +51,240 @@ VISION_TOOLS: list[dict[str, Any]] = [
             "required": ["seconds"],
         },
     },
-    {
-        "name": "complete",
-        "description": (
-            "Call when the booking is confirmed (you see a confirmation/'booked' screen with a total and "
-            "reference number). Provide the observed restaurant name, total in EUR, time slot, and "
-            "reference id."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "restaurant_name": {"type": "string"},
-                "price_eur": {"type": "number"},
-                "time_slot": {"type": "string"},
-                "reference": {"type": "string"},
-            },
-            "required": ["restaurant_name", "price_eur"],
-        },
-    },
 ]
 
 
-SYSTEM_PROMPT_TEMPLATE = """\
+_CURSOR_INJECT_JS = r"""
+() => {
+  if (document.getElementById('__agent_cursor')) return;
+  const c = document.createElement('div');
+  c.id = '__agent_cursor';
+  c.style.cssText =
+    'position:fixed;pointer-events:none;width:30px;height:30px;border-radius:50%;'
+    +'background:rgba(255,90,90,0.55);border:3px solid #fff;'
+    +'transform:translate(-50%,-50%) scale(1);'
+    +'z-index:99999;box-shadow:0 8px 22px rgba(0,0,0,0.35);'
+    +'left:50%;top:30%;'
+    +'transition:left .35s cubic-bezier(.4,.0,.2,1), top .35s cubic-bezier(.4,.0,.2,1), transform .14s ease, background .12s ease;';
+  document.body.appendChild(c);
+
+  const ring = document.createElement('div');
+  ring.id = '__agent_ring';
+  ring.style.cssText =
+    'position:fixed;pointer-events:none;width:60px;height:60px;border-radius:50%;'
+    +'border:3px solid rgba(255,90,90,0.75);'
+    +'transform:translate(-50%,-50%) scale(0);opacity:0;'
+    +'z-index:99998;'
+    +'transition:transform .45s ease-out, opacity .45s ease-out;'
+    +'left:50%;top:30%;';
+  document.body.appendChild(ring);
+}
+"""
+
+
+async def _move_cursor(page: Page, x: float, y: float) -> None:
+    await page.evaluate(
+        "(p) => { const c=document.getElementById('__agent_cursor');"
+        " if(c){ c.style.left=p.x+'px'; c.style.top=p.y+'px'; }"
+        " const r=document.getElementById('__agent_ring');"
+        " if(r){ r.style.left=p.x+'px'; r.style.top=p.y+'px'; r.style.opacity='0'; r.style.transform='translate(-50%,-50%) scale(0)'; }"
+        " }",
+        {"x": x, "y": y},
+    )
+
+
+async def _pulse_cursor(page: Page) -> None:
+    await page.evaluate(
+        "() => { const c=document.getElementById('__agent_cursor');"
+        " if(c){ c.style.transform='translate(-50%,-50%) scale(0.7)'; c.style.background='rgba(0, 226, 196, 0.85)'; }"
+        " const r=document.getElementById('__agent_ring');"
+        " if(r){ r.style.opacity='1'; r.style.transform='translate(-50%,-50%) scale(1.6)'; }"
+        " }"
+    )
+
+
+async def _restore_cursor(page: Page) -> None:
+    await page.evaluate(
+        "() => { const c=document.getElementById('__agent_cursor');"
+        " if(c){ c.style.transform='translate(-50%,-50%) scale(1)'; c.style.background='rgba(255,90,90,0.55)'; }"
+        " }"
+    )
+
+
+async def _emit_screenshot_quick(page: Page, label: str) -> None:
+    png = await page.screenshot(type="png", full_page=False)
+    bus.publish("browser_screenshot", {
+        "label": label,
+        "b64": base64.b64encode(png).decode(),
+        "mime": "image/png",
+    })
+
+
+async def _click_first_text(page: Page, text: str) -> bool:
+    """Locate, animate cursor to target, click — emitting transition frames."""
+    candidates = [
+        page.get_by_role("button", name=text, exact=False),
+        page.get_by_text(text, exact=False).first,
+    ]
+    for loc in candidates:
+        try:
+            target = loc.first
+            await target.scroll_into_view_if_needed(timeout=1500)
+            box = await target.bounding_box()
+            if not box:
+                await target.click(timeout=2500)
+                return True
+            cx = box["x"] + box["width"] / 2
+            cy = box["y"] + box["height"] / 2
+
+            # Animate the cursor toward the target across a few frames.
+            await page.evaluate(_CURSOR_INJECT_JS)
+            await _move_cursor(page, cx, cy)
+            # Mid-flight frame
+            await asyncio.sleep(0.12)
+            await _emit_screenshot_quick(page, "→ moving cursor")
+            await asyncio.sleep(0.18)
+            await _emit_screenshot_quick(page, "→ targeting")
+
+            # Click + visual pulse
+            await _pulse_cursor(page)
+            await _emit_screenshot_quick(page, "click!")
+            await target.click(timeout=2500)
+            await asyncio.sleep(0.20)
+            await _emit_screenshot_quick(page, "after click")
+            await _restore_cursor(page)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def _drive_booking_flow(
+    base_url: str,
+    system_prompt: str,
+    complete_tool: dict[str, Any],
+    scrape_js: str,
+    confirmed_check: str,
+    success_event_label: str,
+    started_event_label: str,
+    started_event_data: dict[str, Any],
+    max_steps: int = 12,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Generic Vision + Playwright loop. The caller defines:
+
+    - `complete_tool` — the JSON schema for the terminal tool the agent calls
+    - `scrape_js`     — JS expression evaluated on completion to read DOM truth
+    - `confirmed_check` — predicate (Python expression evaluated on the scrape
+       dict) that returns True iff the page is on the success screen
+    - `success_event_label` — name of the bus event when the flow completes
+    - `started_event_label` / `_data` — what to publish before the loop starts
+    """
+    model = model or os.getenv("ANTHROPIC_MODEL", "").strip() or "claude-haiku-4-5-20251001"
+    client = anthropic.Anthropic()
+    tools = _BASE_TOOLS + [complete_tool]
+
+    bus.publish(started_event_label, started_event_data)
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            context = await browser.new_context(viewport={"width": 1100, "height": 760})
+            page = await context.new_page()
+            await page.goto(base_url, wait_until="networkidle")
+            await asyncio.sleep(0.25)
+            # Inject the visible cursor + ring overlay once.
+            await page.evaluate(_CURSOR_INJECT_JS)
+            await asyncio.sleep(0.2)
+
+            messages: list[dict[str, Any]] = []
+            history: list[str] = []
+
+            for step in range(max_steps):
+                png = await page.screenshot(type="png", full_page=False)
+                b64 = base64.b64encode(png).decode()
+                bus.publish("browser_screenshot", {"label": f"step {step+1}", "b64": b64, "mime": "image/png"})
+
+                user_content: list[dict[str, Any]] = [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                    {"type": "text", "text": (
+                        f"Step {step+1}/{max_steps}. Recent: {history[-3:] if history else 'none'}. "
+                        f"Decide the next single action."
+                    )},
+                ]
+                messages.append({"role": "user", "content": user_content})
+
+                resp = client.messages.create(
+                    model=model,
+                    max_tokens=512,
+                    system=system_prompt,
+                    tools=tools,
+                    messages=messages,
+                )
+                messages.append({"role": "assistant", "content": resp.content})
+
+                tool_uses = [b for b in resp.content if b.type == "tool_use"]
+                if not tool_uses:
+                    history.append("idle")
+                    messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "noop", "content": "noop"}]})
+                    continue
+
+                tool_results = []
+                completed: dict[str, Any] | None = None
+
+                for tu in tool_uses:
+                    name = tu.name
+                    args = tu.input or {}
+                    if name == "click_text":
+                        text = str(args.get("text", "")).strip()
+                        bus.publish("browser_action", {"action": "click_text", "text": text})
+                        ok = await _click_first_text(page, text)
+                        history.append(f"click_text({text!r}) -> {'ok' if ok else 'miss'}")
+                        await asyncio.sleep(0.4)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tu.id,
+                            "content": "ok" if ok else f"could not find element with text {text!r}",
+                            "is_error": not ok,
+                        })
+                    elif name == "wait":
+                        secs = float(args.get("seconds", 0.5))
+                        bus.publish("browser_action", {"action": "wait", "seconds": secs})
+                        await asyncio.sleep(min(secs, 3.0))
+                        history.append(f"wait({secs:.1f})")
+                        tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": "waited"})
+                    elif name == "complete":
+                        scraped = await page.evaluate(scrape_js)
+                        if not eval(confirmed_check, {"s": scraped}):  # noqa: S307
+                            history.append("complete-too-early; not on confirmation screen")
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tu.id,
+                                "content": "Not yet confirmed — keep going.",
+                                "is_error": True,
+                            })
+                            continue
+                        # Merge: scraped DOM truth wins over any agent-supplied values.
+                        completed = {**args, **{k: v for k, v in scraped.items() if v not in (None, "", 0)}}
+                        bus.publish(success_event_label, completed)
+                        tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": "complete acknowledged"})
+                    else:
+                        tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": f"unknown tool {name}", "is_error": True})
+
+                if completed:
+                    return completed
+                messages.append({"role": "user", "content": tool_results})
+
+            raise RuntimeError(f"browser_agent did not complete inside {max_steps} steps")
+        finally:
+            await browser.close()
+
+
+# ----------------------------------------------------------------------
+# Task 1: book a restaurant (Weekend)
+# ----------------------------------------------------------------------
+
+_RESTAURANT_SYSTEM = """\
 You are a browser agent driving a real Chromium against a restaurant-booking site.
 
 # Goal
@@ -79,35 +299,40 @@ User hint: "{restaurant_hint}"
 # Action rules
 - One screenshot at a time. Examine the latest screenshot, decide one tool call.
 - To navigate, use click_text with the EXACT visible text on a button/element.
-- The booking is final only after the confirmation screen shows "Booking confirmed" with a reference number.
+- The booking is final only after the confirmation screen shows "Booking confirmed" with a reference.
 - When you see the confirmation screen, call `complete` with the observed details.
-- If the page seems mid-transition, call `wait` with seconds=0.5.
 
 # Budget
-Pick the cheapest restaurant matching the hint within budget. Tie-break: pick the higher-rated.
+Pick the cheapest restaurant matching the hint within budget. Tie-break: higher rating.
 """
 
+_RESTAURANT_COMPLETE_TOOL = {
+    "name": "complete",
+    "description": (
+        "Call when the booking is confirmed. Provide the observed restaurant name, "
+        "total EUR, time slot, and reference id."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "restaurant_name": {"type": "string"},
+            "price_eur": {"type": "number"},
+            "time_slot": {"type": "string"},
+            "reference": {"type": "string"},
+        },
+        "required": ["restaurant_name", "price_eur"],
+    },
+}
 
-async def _emit_screenshot(page: Page, label: str) -> None:
-    png = await page.screenshot(type="png", full_page=False)
-    b64 = base64.b64encode(png).decode()
-    bus.publish("browser_screenshot", {"label": label, "b64": b64, "mime": "image/png"})
-
-
-async def _click_first_text(page: Page, text: str) -> bool:
-    """Try several locator strategies; return True if click succeeded."""
-    candidates = [
-        page.get_by_role("button", name=text, exact=False),
-        page.get_by_text(text, exact=False).first,
-    ]
-    for loc in candidates:
-        try:
-            await loc.first.scroll_into_view_if_needed(timeout=1500)
-            await loc.first.click(timeout=2500)
-            return True
-        except Exception:
-            continue
-    return False
+_RESTAURANT_SCRAPE_JS = (
+    "() => ({ "
+    "  status: document.body.dataset.bookingStatus || '',"
+    "  restaurant_name: document.body.dataset.bookingRestaurant || '',"
+    "  price_eur: parseFloat(document.body.dataset.bookingPrice || '0') || 0,"
+    "  reference: document.body.dataset.bookingRef || '',"
+    "  time_slot: document.body.dataset.bookingTime || '' "
+    "})"
+)
 
 
 async def book_restaurant_via_browser(
@@ -118,133 +343,166 @@ async def book_restaurant_via_browser(
     max_steps: int = 12,
     model: str | None = None,
 ) -> dict[str, Any]:
-    """Drive the local mock restaurant site to a confirmed booking.
-
-    Returns a dict with at least {restaurant_name, price_eur, time_slot, reference}.
-    Raises if it can't complete inside max_steps.
-    """
-    model = model or os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
-    client = anthropic.Anthropic()
-    system = SYSTEM_PROMPT_TEMPLATE.format(
-        when=when, max_budget=max_budget, restaurant_hint=restaurant_hint
+    return await _drive_booking_flow(
+        base_url=base_url,
+        system_prompt=_RESTAURANT_SYSTEM.format(when=when, max_budget=max_budget, restaurant_hint=restaurant_hint),
+        complete_tool=_RESTAURANT_COMPLETE_TOOL,
+        scrape_js=_RESTAURANT_SCRAPE_JS,
+        confirmed_check="s.get('status') == 'confirmed'",
+        success_event_label="browser_complete",
+        started_event_label="browser_started",
+        started_event_data={
+            "site": base_url, "task": "book_restaurant",
+            "restaurant_hint": restaurant_hint, "max_budget": max_budget, "when": when,
+        },
+        max_steps=max_steps,
+        model=model,
     )
 
-    bus.publish("browser_started", {
-        "site": base_url,
-        "restaurant_hint": restaurant_hint,
-        "max_budget": max_budget,
-        "when": when,
-    })
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        try:
-            context = await browser.new_context(viewport={"width": 1100, "height": 760})
-            page = await context.new_page()
-            await page.goto(base_url, wait_until="networkidle")
-            await asyncio.sleep(0.3)
-            await _emit_screenshot(page, "Loaded site")
+# ----------------------------------------------------------------------
+# Task 2: book a hotel (Travel)
+# ----------------------------------------------------------------------
 
-            messages: list[dict[str, Any]] = []
-            history_text: list[str] = []
+_HOTEL_SYSTEM = """\
+You are a browser agent driving a real Chromium against a hotel-booking site.
 
-            for step in range(max_steps):
-                # Capture current screenshot
-                png = await page.screenshot(type="png", full_page=False)
-                b64 = base64.b64encode(png).decode()
-                bus.publish("browser_screenshot", {"label": f"step {step+1}", "b64": b64, "mime": "image/png"})
+# Goal
+Book a hotel in {city} for {nights} night(s). Stay at or under €{max_budget} total.
 
-                user_content: list[dict[str, Any]] = [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-                    {"type": "text", "text": (
-                        f"Step {step+1}/{max_steps}. "
-                        f"Recent actions: {history_text[-3:] if history_text else 'none'}. "
-                        f"Decide the next single action."
-                    )},
-                ]
-                messages.append({"role": "user", "content": user_content})
+# Site flow (3 screens)
+1. Browse — list of hotels with photo, name, area, rating, "Book €N/night" button
+2. Pick nights — confirmation of nights/total, "Continue" button
+3. Confirm — summary, "Confirm booking" button, then confirmation screen
 
-                resp = client.messages.create(
-                    model=model,
-                    max_tokens=512,
-                    system=system,
-                    tools=VISION_TOOLS,
-                    messages=messages,
-                )
-                messages.append({"role": "assistant", "content": resp.content})
+# Action rules
+- One screenshot at a time. Use click_text with the EXACT visible text.
+- The booking is final only after the confirmation screen shows "Hotel booked" with a reference.
+- When you see the confirmation, call `complete` with the observed details.
 
-                tool_uses = [b for b in resp.content if b.type == "tool_use"]
-                if not tool_uses:
-                    bus.publish("browser_idle", {"step": step})
-                    history_text.append("idle")
-                    messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "noop", "content": "noop"}]})
-                    continue
+# Budget
+Pick the cheapest hotel within budget. Tie-break: higher rating.
+"""
 
-                tool_results = []
-                completed: dict[str, Any] | None = None
+_HOTEL_COMPLETE_TOOL = {
+    "name": "complete",
+    "description": "Call when the hotel booking is confirmed. Provide the observed hotel name, total EUR, nights, reference id.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "hotel_name": {"type": "string"},
+            "price_eur": {"type": "number"},
+            "nights": {"type": "integer"},
+            "reference": {"type": "string"},
+        },
+        "required": ["hotel_name", "price_eur"],
+    },
+}
 
-                for tu in tool_uses:
-                    name = tu.name
-                    args = tu.input or {}
-                    if name == "click_text":
-                        text = str(args.get("text", "")).strip()
-                        bus.publish("browser_action", {"action": "click_text", "text": text})
-                        ok = await _click_first_text(page, text)
-                        history_text.append(f"click_text({text!r}) -> {'ok' if ok else 'miss'}")
-                        await asyncio.sleep(0.4)
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tu.id,
-                            "content": "ok" if ok else f"could not find element with text {text!r}",
-                            "is_error": not ok,
-                        })
-                    elif name == "wait":
-                        secs = float(args.get("seconds", 0.5))
-                        bus.publish("browser_action", {"action": "wait", "seconds": secs})
-                        await asyncio.sleep(min(secs, 3.0))
-                        history_text.append(f"wait({secs:.1f})")
-                        tool_results.append({
-                            "type": "tool_result", "tool_use_id": tu.id, "content": "waited"
-                        })
-                    elif name == "complete":
-                        # Cross-check with DOM scrape — the source of truth.
-                        scraped = await page.evaluate(
-                            "() => ({\n"
-                            "  status: document.body.dataset.bookingStatus || '',\n"
-                            "  restaurant: document.body.dataset.bookingRestaurant || '',\n"
-                            "  price: parseFloat(document.body.dataset.bookingPrice || '0'),\n"
-                            "  ref: document.body.dataset.bookingRef || '',\n"
-                            "  time: document.body.dataset.bookingTime || ''\n"
-                            "})"
-                        )
-                        if scraped.get("status") != "confirmed":
-                            history_text.append("complete-too-early; not on confirmation screen")
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": tu.id,
-                                "content": "Booking not yet confirmed — keep going (haven't reached the success screen).",
-                                "is_error": True,
-                            })
-                            continue
-                        completed = {
-                            "restaurant_name": scraped["restaurant"] or args.get("restaurant_name", ""),
-                            "price_eur": float(scraped["price"]) or float(args.get("price_eur", 0)),
-                            "time_slot": scraped["time"] or args.get("time_slot", when),
-                            "reference": scraped["ref"] or args.get("reference", ""),
-                        }
-                        bus.publish("browser_complete", completed)
-                        tool_results.append({
-                            "type": "tool_result", "tool_use_id": tu.id, "content": "complete acknowledged"
-                        })
-                    else:
-                        tool_results.append({
-                            "type": "tool_result", "tool_use_id": tu.id, "content": f"unknown tool {name}", "is_error": True
-                        })
+_HOTEL_SCRAPE_JS = (
+    "() => ({ "
+    "  status: document.body.dataset.bookingStatus || '',"
+    "  hotel_name: document.body.dataset.bookingHotel || '',"
+    "  price_eur: parseFloat(document.body.dataset.bookingPrice || '0') || 0,"
+    "  reference: document.body.dataset.bookingRef || '',"
+    "  nights: parseInt(document.body.dataset.bookingNights || '0', 10) || 0 "
+    "})"
+)
 
-                if completed:
-                    return completed
-                messages.append({"role": "user", "content": tool_results})
 
-            raise RuntimeError(f"browser_agent did not complete inside {max_steps} steps")
-        finally:
-            await browser.close()
+async def book_hotel_via_browser(
+    city: str,
+    nights: int,
+    max_budget: float,
+    base_url: str,
+    max_steps: int = 12,
+    model: str | None = None,
+) -> dict[str, Any]:
+    return await _drive_booking_flow(
+        base_url=base_url,
+        system_prompt=_HOTEL_SYSTEM.format(city=city, nights=nights, max_budget=max_budget),
+        complete_tool=_HOTEL_COMPLETE_TOOL,
+        scrape_js=_HOTEL_SCRAPE_JS,
+        confirmed_check="s.get('status') == 'confirmed'",
+        success_event_label="browser_complete",
+        started_event_label="browser_started",
+        started_event_data={
+            "site": base_url, "task": "book_hotel",
+            "city": city, "nights": nights, "max_budget": max_budget,
+        },
+        max_steps=max_steps,
+        model=model,
+    )
+
+
+# ----------------------------------------------------------------------
+# Task 3: subscribe to a service (Payday)
+# ----------------------------------------------------------------------
+
+_SUB_SYSTEM = """\
+You are a browser agent driving a real Chromium against a subscription comparison site.
+
+# Goal
+Pick the cheapest plan in the "{category}" category that costs at most €{max_monthly} per month.
+
+# Site flow (2 screens)
+1. Browse — grid of plans with provider, plan name, monthly price, "Subscribe €N/mo" button
+2. Confirm — summary card, "Confirm subscription" button, then confirmation screen
+
+# Action rules
+- One screenshot at a time. Use click_text with the EXACT visible button text.
+- The subscription is final only after "Subscription active" appears with a reference.
+- When you see the confirmation, call `complete` with the observed details.
+
+# Budget
+Pick the cheapest plan within budget. Tie-break: longest list of features.
+"""
+
+_SUB_COMPLETE_TOOL = {
+    "name": "complete",
+    "description": "Call when the subscription confirmation screen is showing. Provide service name, plan, monthly EUR, and reference.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "service_name": {"type": "string"},
+            "plan": {"type": "string"},
+            "monthly_eur": {"type": "number"},
+            "reference": {"type": "string"},
+        },
+        "required": ["service_name", "monthly_eur"],
+    },
+}
+
+_SUB_SCRAPE_JS = (
+    "() => ({ "
+    "  status: document.body.dataset.subscriptionStatus || '',"
+    "  service_name: document.body.dataset.subscriptionService || '',"
+    "  plan: document.body.dataset.subscriptionPlan || '',"
+    "  monthly_eur: parseFloat(document.body.dataset.subscriptionMonthly || '0') || 0,"
+    "  reference: document.body.dataset.subscriptionRef || '' "
+    "})"
+)
+
+
+async def subscribe_to_service_via_browser(
+    category: str,
+    max_monthly_eur: float,
+    base_url: str,
+    max_steps: int = 12,
+    model: str | None = None,
+) -> dict[str, Any]:
+    return await _drive_booking_flow(
+        base_url=base_url,
+        system_prompt=_SUB_SYSTEM.format(category=category, max_monthly=max_monthly_eur),
+        complete_tool=_SUB_COMPLETE_TOOL,
+        scrape_js=_SUB_SCRAPE_JS,
+        confirmed_check="s.get('status') == 'active'",
+        success_event_label="browser_complete",
+        started_event_label="browser_started",
+        started_event_data={
+            "site": base_url, "task": "subscribe_to_service",
+            "category": category, "max_monthly_eur": max_monthly_eur,
+        },
+        max_steps=max_steps,
+        model=model,
+    )

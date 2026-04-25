@@ -40,8 +40,9 @@ from .agent_loop import run_mission
 from .bunq_tools import BunqToolbox
 from .events import bus
 from .missions import MISSIONS
-from .places import search_restaurants
+from .places import search_hotels, search_restaurants
 from .stt import transcribe_bytes, transcribe_file
+from .subscriptions import list_plans
 
 
 load_dotenv(override=True)
@@ -315,6 +316,69 @@ async def mock_restaurant_index(query: str | None = None) -> Any:
 
     rendered = _inject_restaurant_data(query=query or "popular dinner restaurants Amsterdam")
     return HTMLResponse(rendered)
+
+
+# Hotel booking site — driven by browser-agent for the Travel mission.
+_HOTEL_HTML_TEMPLATE: str | None = None
+
+
+def _hotel_html() -> str:
+    global _HOTEL_HTML_TEMPLATE
+    if _HOTEL_HTML_TEMPLATE is None:
+        _HOTEL_HTML_TEMPLATE = (MOCK_SITES_DIR / "hotel" / "index.html").read_text()
+    return _HOTEL_HTML_TEMPLATE
+
+
+def _inject_hotel_data(city: str, nights: int) -> str:
+    import json as _json
+
+    html = _hotel_html()
+    hotels = search_hotels(city, max_results=4)
+    return (
+        html
+        .replace("__HOTELS__", _json.dumps(hotels, ensure_ascii=False))
+        .replace("__CITY__", city)
+        .replace("__NIGHTS__", str(int(nights)))
+    )
+
+
+@app.get("/mock-hotel/")
+@app.get("/mock-hotel")
+async def mock_hotel_index(city: str = "Tokyo", nights: int = 3) -> Any:
+    from fastapi.responses import HTMLResponse
+
+    return HTMLResponse(_inject_hotel_data(city=city, nights=nights))
+
+
+# Subscription comparison site — driven by browser-agent for the Payday mission.
+_SUB_HTML_TEMPLATE: str | None = None
+
+
+def _sub_html() -> str:
+    global _SUB_HTML_TEMPLATE
+    if _SUB_HTML_TEMPLATE is None:
+        _SUB_HTML_TEMPLATE = (MOCK_SITES_DIR / "subscriptions" / "index.html").read_text()
+    return _SUB_HTML_TEMPLATE
+
+
+def _inject_subscription_data(category: str) -> str:
+    import json as _json
+
+    html = _sub_html()
+    plans = list_plans(category, limit=6)
+    return (
+        html
+        .replace("__PLANS__", _json.dumps(plans, ensure_ascii=False))
+        .replace("__CATEGORY__", category)
+    )
+
+
+@app.get("/mock-subscriptions/")
+@app.get("/mock-subscriptions")
+async def mock_subscriptions_index(category: str = "streaming") -> Any:
+    from fastapi.responses import HTMLResponse
+
+    return HTMLResponse(_inject_subscription_data(category=category))
 
 
 # ----- bunq webhook receiver ------------------------------------------

@@ -67,8 +67,8 @@ def main() -> int:
     print("=" * 60)
     print("Mission complete")
     print("=" * 60)
-    print(f"  sub-account id: {result['mission_sub_id']}")
-    print(f"  sub-account IBAN: {result['mission_sub_iban']}")
+    print(f"  primary id: {result['primary_id']}")
+    print(f"  primary IBAN: {result['primary_iban']}")
     if result["draft_id"]:
         print(f"  draft payment id: {result['draft_id']}")
     print(f"  narrations: {len(result['narrations'])}")

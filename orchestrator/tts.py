@@ -1,29 +1,48 @@
-"""ElevenLabs TTS — synthesize narration on demand, cache to disk.
+"""ElevenLabs TTS — synthesize narration on demand, *no caching*.
 
-Uses HTTPS directly (no SDK) for tighter control over latency and caching.
-Cached files live at `assets/tts_cache/<sha1>.mp3` so repeat phrases
-(e.g. "Mission complete") play instantly with zero API spend.
+Every call hits ElevenLabs fresh and writes a uniquely-named MP3 to
+`assets/tts_cache/`. The directory acts as a short-lived runtime store
+served by /tts/<filename>. Files older than TTL_SECONDS are pruned
+opportunistically on each synthesis so the disk doesn't bloat.
+
+The voice settings are jittered slightly per call so identical text reads
+with slightly different prosody — keeps the demo from sounding canned.
 """
 
 from __future__ import annotations
 
-import hashlib
 import os
+import random
+import secrets
+import time
 from pathlib import Path
 
 import httpx
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CACHE_DIR = PROJECT_ROOT / "assets" / "tts_cache"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+RUNTIME_DIR = PROJECT_ROOT / "assets" / "tts_cache"  # path retained for server compat
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_MODEL = "eleven_turbo_v2_5"
+TTL_SECONDS = 5 * 60  # prune audio files older than 5 minutes
 
 
-def _cache_path(text: str, voice_id: str) -> Path:
-    digest = hashlib.sha1(f"{voice_id}::{text}".encode()).hexdigest()[:16]
-    return CACHE_DIR / f"{digest}.mp3"
+def _prune_old() -> None:
+    cutoff = time.time() - TTL_SECONDS
+    try:
+        for f in RUNTIME_DIR.iterdir():
+            if not f.is_file():
+                continue
+            if f.suffix != ".mp3":
+                continue
+            if f.stat().st_mtime < cutoff:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def synthesize_narration(
@@ -31,10 +50,7 @@ def synthesize_narration(
     voice_id: str | None = None,
     model_id: str = DEFAULT_MODEL,
 ) -> str:
-    """Synthesize `text` to MP3, cache to disk, return the cache filename (no path).
-
-    The server's /tts/<filename> endpoint serves it back to the browser.
-    """
+    """Synthesize `text` to a fresh MP3 file. Returns the filename only."""
     voice_id = voice_id or os.getenv("ELEVENLABS_VOICE_ID", "").strip()
     if not voice_id:
         raise RuntimeError("ELEVENLABS_VOICE_ID missing")
@@ -42,9 +58,19 @@ def synthesize_narration(
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY missing")
 
-    out = _cache_path(text, voice_id)
-    if out.exists() and out.stat().st_size > 256:
-        return out.name
+    _prune_old()
+
+    out = RUNTIME_DIR / f"{int(time.time() * 1000):x}_{secrets.token_hex(3)}.mp3"
+
+    # Slight per-call jitter in voice settings so repeated phrases sound natural,
+    # not karaoke-perfect identical.
+    rng = random.Random(out.name)
+    settings = {
+        "stability": round(rng.uniform(0.40, 0.55), 2),
+        "similarity_boost": round(rng.uniform(0.70, 0.82), 2),
+        "style": round(rng.uniform(0.15, 0.35), 2),
+        "use_speaker_boost": True,
+    }
 
     r = httpx.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
@@ -56,12 +82,7 @@ def synthesize_narration(
         json={
             "text": text,
             "model_id": model_id,
-            "voice_settings": {
-                "stability": 0.45,
-                "similarity_boost": 0.75,
-                "style": 0.2,
-                "use_speaker_boost": True,
-            },
+            "voice_settings": settings,
             "output_format": "mp3_44100_128",
         },
         timeout=20.0,

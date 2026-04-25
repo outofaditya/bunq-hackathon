@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# Mission Mode launcher — opens ngrok + FastAPI server in two new Terminal windows.
+# Mission Mode launcher — IDE-friendly by default.
+#
+# Default behaviour: run ngrok + FastAPI server in the CURRENT terminal,
+# multiplexed with prefixed output. Ideal for VS Code, Cursor, JetBrains,
+# tmux — any IDE-integrated terminal. Ctrl-C kills both.
+#
+# If you want a separate macOS Terminal.app window per service, pass
+# --macos-terminal.
 #
 # Usage:
-#   ./start.sh             open both ngrok + server in separate Terminal tabs
-#   ./start.sh --no-ngrok  start server only (polling-only mode, no real webhooks)
-#   ./start.sh --inline    run both in current terminal, multiplexed (Ctrl-C kills both)
+#   ./start.sh                     run inline in this terminal (recommended; default)
+#   ./start.sh --no-ngrok          server only (polling-only mode)
+#   ./start.sh --macos-terminal    spawn two Terminal.app windows
+#   ./start.sh --vscode            print the VS Code task command and exit (use Cmd+Shift+P → Run Task)
 
 set -euo pipefail
 
@@ -18,17 +26,42 @@ warn()  { printf "${YELLOW}!${RESET} %s\n" "$1"; }
 err()   { printf "${RED}✗${RESET} %s\n" "$1"; }
 
 USE_NGROK=1
-INLINE=0
+MODE="inline"
 for arg in "$@"; do
     case "$arg" in
-        --no-ngrok) USE_NGROK=0 ;;
-        --inline)   INLINE=1 ;;
+        --no-ngrok)        USE_NGROK=0 ;;
+        --inline)          MODE="inline" ;;            # explicit (already default)
+        --macos-terminal)  MODE="macos-terminal" ;;
+        --vscode)          MODE="vscode-hint" ;;
         --help|-h)
-            sed -n '2,10p' "$0"
+            sed -n '2,15p' "$0"
             exit 0
             ;;
     esac
 done
+
+# --- vscode hint mode --------------------------------------------------
+
+if [[ "$MODE" == "vscode-hint" ]]; then
+    cat <<EOM
+${CYAN}→${RESET} VS Code / Cursor users — use the integrated task runner instead of this script:
+
+  1) Cmd+Shift+P → "Tasks: Run Task"
+  2) Pick "${GREEN}Mission Mode: launch (ngrok + server)${RESET}"
+  3) Two dedicated terminal panels open inside the editor — one for ngrok,
+     one for the server. Both stay attached to the workspace.
+
+Other tasks defined in .vscode/tasks.json:
+  - Mission Mode: ngrok               (just the tunnel)
+  - Mission Mode: server              (just the FastAPI app)
+  - Mission Mode: stop everything     (./stop.sh)
+  - Mission Mode: smoke tests (fast)  (pytest, no LLM cost)
+
+Or just run ${GREEN}./start.sh${RESET} in any IDE terminal — the default mode (inline)
+shows both services prefixed in one panel.
+EOM
+    exit 0
+fi
 
 # --- preflight ---------------------------------------------------------
 
@@ -55,10 +88,15 @@ if lsof -ti :8000 >/dev/null 2>&1; then
     sleep 1
 fi
 
-# --- inline mode (single terminal, prefixed output) --------------------
+# Detect IDE so we can give the user a relevant hint.
+if [[ "${TERM_PROGRAM:-}" == "vscode" ]] && [[ "$MODE" == "inline" ]]; then
+    log "detected IDE terminal — see .vscode/tasks.json for split panel mode."
+fi
 
-if [[ "$INLINE" == "1" ]]; then
-    log "Inline mode — both processes in this terminal. Ctrl-C kills both."
+# --- inline mode (DEFAULT; current terminal, prefixed output) ----------
+
+if [[ "$MODE" == "inline" ]]; then
+    log "inline mode — both services in this terminal. Ctrl-C kills both."
     pids=()
     cleanup() {
         for pid in "${pids[@]:-}"; do
@@ -71,7 +109,7 @@ if [[ "$INLINE" == "1" ]]; then
 
     if [[ "$USE_NGROK" == "1" ]]; then
         log "starting ngrok…"
-        ngrok http 8000 --log=stdout 2>&1 | sed -e $'s/^/\033[33m[ngrok]\033[0m /' &
+        ngrok http 8000 --log=stdout 2>&1 | sed -e $'s/^/\033[33m[ngrok]\033[0m  /' &
         pids+=($!)
         sleep 2
     fi
@@ -82,64 +120,56 @@ if [[ "$INLINE" == "1" ]]; then
     python -m orchestrator.server 2>&1 | sed -e $'s/^/\033[36m[server]\033[0m /' &
     pids+=($!)
 
-    sleep 4
-    ok "dashboard: http://localhost:8000/"
+    sleep 5
+
+    if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
+        ok "server is live at http://localhost:8000/"
+        if [[ "$USE_NGROK" == "1" ]]; then
+            public_url=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null \
+                | python3 -c 'import json,sys; d=json.load(sys.stdin); ts=[t["public_url"] for t in d.get("tunnels",[]) if t.get("proto")=="https"]; print(ts[0] if ts else "")' 2>/dev/null || true)
+            [[ -n "$public_url" ]] && ok "ngrok public URL: $public_url"
+        fi
+    fi
+
+    # Try to open the dashboard, but only if not in a headless CI-like env.
+    if [[ -n "${TERM_PROGRAM:-}" ]] || [[ -z "${SSH_TTY:-}" ]]; then
+        (sleep 1 && open "http://localhost:8000/" >/dev/null 2>&1 || true) &
+    fi
+
     wait
     exit 0
 fi
 
-# --- two-terminal mode (default; macOS only) ---------------------------
+# --- macOS Terminal.app mode (opt-in via --macos-terminal) -------------
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-    err "Two-terminal mode requires macOS Terminal.app. Use --inline instead."
-    exit 1
-fi
+if [[ "$MODE" == "macos-terminal" ]]; then
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        err "--macos-terminal requires macOS. Use the default (inline) mode."
+        exit 1
+    fi
 
-# Open a new Terminal.app window running the given command.
-open_terminal() {
-    local title="$1"; local cmd="$2"
-    osascript >/dev/null <<APPLESCRIPT
+    open_terminal() {
+        local title="$1"; local cmd="$2"
+        osascript >/dev/null <<APPLESCRIPT
 tell application "Terminal"
     activate
     do script "printf '\\\\033]0;${title}\\\\007'; clear; ${cmd}"
 end tell
 APPLESCRIPT
-}
+    }
 
-if [[ "$USE_NGROK" == "1" ]]; then
-    log "opening ngrok in a new Terminal window…"
-    open_terminal "ngrok · Mission Mode" "cd '$PROJECT_ROOT' && ngrok http 8000"
-    log "  waiting 3s for tunnel to come up…"
-    sleep 3
-fi
-
-log "opening server in a new Terminal window…"
-open_terminal "server · Mission Mode" "cd '$PROJECT_ROOT' && source .venv/bin/activate && python -m orchestrator.server"
-
-log "  waiting 5s for FastAPI to bind :8000…"
-sleep 5
-
-if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
-    ok "server is live"
     if [[ "$USE_NGROK" == "1" ]]; then
-        public_url=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); ts=[t["public_url"] for t in d.get("tunnels",[]) if t.get("proto")=="https"]; print(ts[0] if ts else "")' 2>/dev/null || true)
-        if [[ -n "$public_url" ]]; then
-            ok "ngrok public URL: $public_url"
-            ok "bunq webhooks should now be reachable"
-        else
-            warn "ngrok tunnel not yet visible at 127.0.0.1:4040 — give it a few seconds, refresh dashboard"
-        fi
+        log "opening ngrok in a new Terminal window…"
+        open_terminal "ngrok · Mission Mode" "cd '$PROJECT_ROOT' && ngrok http 8000"
+        sleep 3
     fi
-else
-    warn "server health check failed — check the server Terminal window for errors"
+
+    log "opening server in a new Terminal window…"
+    open_terminal "server · Mission Mode" "cd '$PROJECT_ROOT' && source .venv/bin/activate && python -m orchestrator.server"
+
+    sleep 5
+    ok "dashboard: http://localhost:8000/"
+    open "http://localhost:8000/" || true
+    log "to stop: ./stop.sh   (or close the two Terminal windows)"
+    exit 0
 fi
-
-echo
-ok "dashboard: http://localhost:8000/"
-echo
-log "to stop: ./stop.sh   (or close the two Terminal windows)"
-echo
-
-# Auto-open the dashboard in the default browser.
-open "http://localhost:8000/" || true

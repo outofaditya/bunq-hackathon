@@ -79,6 +79,80 @@ def _short_cuisine(types: list[str], summary: str | None) -> str:
     return "Restaurant · Amsterdam"
 
 
+HARDCODED_HOTELS: list[dict[str, Any]] = [
+    {"id": "park-tokyo",  "name": "The Park Tokyo",   "emoji": "🏨", "area": "Shibuya · 4.8★",        "nightly": 180, "meta": "Boutique · 24/7 concierge"},
+    {"id": "shinjuku-h",  "name": "Shinjuku Capsule", "emoji": "🛏️", "area": "Shinjuku · 4.4★",       "nightly": 65,  "meta": "Pod-style · steps from station"},
+    {"id": "asakusa-r",   "name": "Asakusa Ryokan",   "emoji": "🎎", "area": "Asakusa · 4.7★",        "nightly": 110, "meta": "Tatami rooms · onsen access"},
+    {"id": "tokyo-bay",   "name": "Tokyo Bay Suites", "emoji": "🌃", "area": "Odaiba · 4.6★",         "nightly": 220, "meta": "Bay view · Marriott loyalty"},
+]
+
+PRICE_LEVEL_TO_NIGHTLY: dict[str, int] = {
+    "PRICE_LEVEL_FREE": 0,
+    "PRICE_LEVEL_INEXPENSIVE": 70,
+    "PRICE_LEVEL_MODERATE": 130,
+    "PRICE_LEVEL_EXPENSIVE": 200,
+    "PRICE_LEVEL_VERY_EXPENSIVE": 320,
+}
+
+
+def search_hotels(city: str, max_results: int = 4, timeout_s: float = 10.0) -> list[dict[str, Any]]:
+    """Live Google Places query for hotels in a city. Falls back to fixture."""
+    api_key = os.getenv("GOOGLE_PLACES_API_KEY", "").strip()
+    if not api_key:
+        return HARDCODED_HOTELS[:max_results]
+
+    field_mask = ",".join([
+        "places.id",
+        "places.displayName",
+        "places.formattedAddress",
+        "places.priceLevel",
+        "places.rating",
+        "places.userRatingCount",
+    ])
+    try:
+        r = httpx.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            headers={
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": api_key,
+                "X-Goog-FieldMask": field_mask,
+            },
+            json={"textQuery": f"{city} hotels", "maxResultCount": max_results, "languageCode": "en"},
+            timeout=timeout_s,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:  # noqa: BLE001
+        print(f"[places-hotels] error: {e!r} — falling back to fixture")
+        return HARDCODED_HOTELS[:max_results]
+
+    out: list[dict[str, Any]] = []
+    for place in (data.get("places") or [])[:max_results]:
+        name = (place.get("displayName") or {}).get("text", "Unknown hotel")
+        addr = place.get("formattedAddress", city)
+        rating = place.get("rating")
+        count = place.get("userRatingCount")
+        nightly = PRICE_LEVEL_TO_NIGHTLY.get(place.get("priceLevel", "PRICE_LEVEL_MODERATE"), 130)
+
+        meta_parts = [addr.split(",")[0]]
+        if rating is not None:
+            sub = f"{rating:.1f}★"
+            if count:
+                sub += f" · {count} reviews"
+            meta_parts.append(sub)
+
+        out.append({
+            "id": place.get("id", name.lower().replace(" ", "-")),
+            "name": name,
+            "emoji": "🏨",
+            "area": meta_parts[0] + (f" · {meta_parts[1]}" if len(meta_parts) > 1 else ""),
+            "nightly": nightly,
+            "meta": (place.get("editorialSummary") or {}).get("text", "Hotel · " + city),
+        })
+
+    return out or HARDCODED_HOTELS[:max_results]
+
+
 def search_restaurants(
     query: str = "popular dinner restaurants Amsterdam",
     max_results: int = 4,
